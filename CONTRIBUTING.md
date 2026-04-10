@@ -31,7 +31,7 @@ PRs without a corresponding issue may be closed if they don't align with the pro
 - Translate modes to other languages
 - Improve documentation
 - Add example CVs for different roles (in `examples/`)
-- Report bugs via [Issues](https://github.com/santifer/career-ops/issues)
+
 
 **Bigger contributions:**
 - New evaluation dimensions or scoring logic
@@ -68,6 +68,5 @@ cd dashboard && go build -o career-dashboard .
 
 ## Need Help?
 
-- [Open an issue](https://github.com/santifer/career-ops/issues)
 - [Read the architecture docs](docs/ARCHITECTURE.md)
-- Built by [santifer](https://santifer.io)
+
