@@ -1,7 +1,7 @@
 # AI-Career-Operations
 
 <p align="center">
-  <img src="docs/hero-banner.jpg" alt="AI-Career-Operations — Multi-Agent Job Search System" width="800">
+  <img src="docs/hero-banner-v2.jpg" alt="AI-Career-Operations — Multi-Agent Job Search System" width="800">
 </p>
 
 <p align="center">
@@ -195,4 +195,3 @@ This project is a fork and significant extension of [career-ops](https://github.
 3. **You comply with third-party ToS.** Use this tool in accordance with the Terms of Service of the career portals you interact with. Do not use it to spam employers.
 4. **No guarantees.** Evaluations are recommendations, not truth. AI models may hallucinate. The authors are not liable for any employment outcomes.
 
-See [LEGAL_DISCLAIMER.md](LEGAL_DISCLAIMER.md) for full details. Open source under the [MIT License](LICENSE).
