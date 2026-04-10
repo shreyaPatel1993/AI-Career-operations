@@ -12,7 +12,6 @@
   <img src="https://img.shields.io/badge/Claude_Code-000?style=flat&logo=anthropic&logoColor=white" alt="Claude Code">
   <img src="https://img.shields.io/badge/Node.js-339933?style=flat&logo=node.js&logoColor=white" alt="Node.js">
   <img src="https://img.shields.io/badge/Playwright-2EAD33?style=flat&logo=playwright&logoColor=white" alt="Playwright">
-  <img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="MIT">
 </p>
 
 ---
@@ -196,8 +195,4 @@ This project is a fork and significant extension of [career-ops](https://github.
 3. **You comply with third-party ToS.** Use this tool in accordance with the Terms of Service of the career portals you interact with. Do not use it to spam employers.
 4. **No guarantees.** Evaluations are recommendations, not truth. AI models may hallucinate. The authors are not liable for any employment outcomes.
 
-See [LEGAL_DISCLAIMER.md](LEGAL_DISCLAIMER.md) for full details. MIT License.
-
-## License
-
-MIT
+See [LEGAL_DISCLAIMER.md](LEGAL_DISCLAIMER.md) for full details. Open source under the [MIT License](LICENSE).
