@@ -1,0 +1,481 @@
+# Portal Scanner Configuration — Shreya Patel | Senior Frontend Engineer
+# Used by /career-ops scan to discover new offers automatically.
+#
+# Strategy (3 levels):
+#   1. Playwright → careers_url of each company (real-time, reliable)
+#   2. Greenhouse API → structured JSON (fast, Greenhouse-only)
+#   3. WebSearch with site: filters (broad discovery, may be stale)
+
+# -- Recency settings --
+# Jobs are sorted newest-first before being added to pipeline.md.
+# Jobs older than max_age_days are skipped entirely.
+recency:
+  max_age_days: 14         # Skip jobs posted more than 14 days ago
+  prefer_days: 3           # Flag jobs posted within 3 days as 🔥 Fresh
+  sort: newest_first       # Always surface newest postings at the top of pipeline.md
+  add_age_label: true      # Append [X days ago] to each pipeline entry
+
+# -- Title filter --
+# At least 1 positive must match AND 0 negatives must match (case-insensitive).
+
+title_filter:
+  positive:
+    - "Frontend"
+    - "Front-end"
+    - "Front End"
+    - "React"
+    - "UI Engineer"
+    - "UI Developer"
+    - "Web Engineer"
+    - "JavaScript Engineer"
+    - "TypeScript Engineer"
+    - "Next.js"
+    - "Full Stack"
+    - "Fullstack"
+    - "Web Developer"
+    - "Software Engineer"
+  negative:
+    - "Junior"
+    - "Intern"
+    - ".NET"
+    - "Java "
+    - "iOS"
+    - "Android"
+    - "PHP"
+    - "Ruby"
+    - "Embedded"
+    - "Firmware"
+    - "FPGA"
+    - "ASIC"
+    - "Blockchain"
+    - "Web3"
+    - "Crypto"
+    - "Salesforce Admin"
+    - "SAP "
+    - "Oracle EBS"
+    - "Mainframe"
+    - "COBOL"
+    - "Backend"
+    - "Back-end"
+    - "Data Engineer"
+    - "Data Scientist"
+    - "Machine Learning"
+    - "DevOps"
+    - "SRE"
+    - "Infrastructure"
+    - "Staff "
+    - "Principal "
+    - "Head of"
+    - "Director"
+    - "VP "
+  seniority_boost:
+    - "Senior"
+    - "Lead"
+
+# -- Search queries --
+# Each query triggers a WebSearch. Use site: to filter by portal.
+
+search_queries:
+
+  # -- Ashby --
+  - name: Ashby — Senior Frontend
+    query: 'site:jobs.ashbyhq.com "Senior Frontend Engineer" OR "Senior React Engineer" remote after:{date_14d}'
+    enabled: true
+
+  - name: Ashby — Frontend / React
+    query: 'site:jobs.ashbyhq.com "Frontend Engineer" OR "React Engineer" OR "UI Engineer" remote after:{date_14d}'
+    enabled: true
+
+  - name: Ashby — Full Stack React
+    query: 'site:jobs.ashbyhq.com "Full Stack Engineer" OR "Fullstack Engineer" React remote after:{date_14d}'
+    enabled: true
+
+  - name: Ashby — Next.js / TypeScript
+    query: 'site:jobs.ashbyhq.com "Next.js" OR "TypeScript" "Frontend" OR "Engineer" remote after:{date_14d}'
+    enabled: true
+
+  # -- Greenhouse --
+  - name: Greenhouse — Senior Frontend
+    query: 'site:boards.greenhouse.io OR site:job-boards.greenhouse.io "Senior Frontend Engineer" remote after:{date_14d}'
+    enabled: true
+
+  - name: Greenhouse — React / UI
+    query: 'site:boards.greenhouse.io OR site:job-boards.greenhouse.io "React Engineer" OR "Frontend Engineer" OR "UI Engineer" remote after:{date_14d}'
+    enabled: true
+
+  - name: Greenhouse — Full Stack React
+    query: 'site:boards.greenhouse.io OR site:job-boards.greenhouse.io "Full Stack" React OR TypeScript remote senior after:{date_14d}'
+    enabled: true
+
+  # -- Lever --
+  - name: Lever — Frontend / React
+    query: 'site:jobs.lever.co "Frontend Engineer" OR "React Engineer" OR "Senior Frontend" remote after:{date_14d}'
+    enabled: true
+
+  - name: Lever — Full Stack / UI
+    query: 'site:jobs.lever.co "Full Stack Engineer" OR "UI Engineer" OR "Web Engineer" React remote after:{date_14d}'
+    enabled: true
+
+  # -- Wellfound (startups) --
+  - name: Wellfound — Senior Frontend
+    query: 'site:wellfound.com "Senior Frontend Engineer" OR "React Engineer" OR "Frontend Lead" remote after:{date_14d}'
+    enabled: true
+
+  - name: Wellfound — Full Stack React
+    query: 'site:wellfound.com "Full Stack" React OR TypeScript remote senior after:{date_14d}'
+    enabled: true
+
+  # -- Workable --
+  - name: Workable — Frontend / React
+    query: 'site:apply.workable.com "Frontend Engineer" OR "React Engineer" OR "UI Developer" remote senior after:{date_14d}'
+    enabled: true
+
+  # -- Remote-first job boards --
+  - name: WeWorkRemotely — Frontend
+    query: 'site:weworkremotely.com "Frontend Engineer" OR "React Engineer" OR "UI Engineer" OR "Full Stack"'
+    enabled: true
+
+  - name: RemoteOK — Frontend / React
+    query: 'site:remoteok.com "Frontend Engineer" OR "React" OR "UI Engineer" OR "Full Stack"'
+    enabled: true
+
+  - name: Remotive — Frontend / React
+    query: 'site:remotive.com "Frontend Engineer" OR "React" OR "UI Engineer" OR "TypeScript"'
+    enabled: true
+
+  - name: Working Nomads — Frontend
+    query: 'site:workingnomads.com "Frontend Engineer" OR "React Engineer" OR "UI Developer"'
+    enabled: true
+
+  - name: Himalayas — Senior Frontend
+    query: 'site:himalayas.app "Senior Frontend Engineer" OR "React Engineer" OR "Frontend Architect" remote'
+    enabled: true
+
+  # -- Aggregators & boards --
+  - name: YC Jobs — Frontend / React
+    query: 'site:workatastartup.com "Frontend Engineer" OR "React Engineer" OR "Full Stack" TypeScript remote'
+    enabled: true
+
+  - name: LinkedIn — Senior Frontend Remote US
+    query: '"Senior Frontend Engineer" OR "Senior React Engineer" remote "United States" TypeScript site:linkedin.com/jobs after:{date_7d}'
+    enabled: true
+
+  - name: HN Who's Hiring — Frontend
+    query: 'site:news.ycombinator.com "Frontend" OR "React" OR "TypeScript" "Senior" OR "Staff" remote'
+    enabled: true
+
+# -- Tracked companies --
+# Companies whose career pages are checked directly.
+
+tracked_companies:
+
+  # -- Big Tech / Product (strong Frontend/React orgs) --
+
+  - name: Stripe
+    careers_url: https://stripe.com/jobs/search
+    scan_method: websearch
+    scan_query: 'site:stripe.com/jobs "Frontend" OR "React" OR "UI Engineer"'
+    notes: "Remote-friendly. World-class frontend engineering culture."
+    enabled: true
+
+  - name: Airbnb
+    careers_url: https://careers.airbnb.com
+    scan_method: websearch
+    scan_query: 'site:careers.airbnb.com "Frontend" OR "React" OR "UI Engineer"'
+    notes: "Remote-friendly. Strong React/TypeScript culture."
+    enabled: true
+
+  - name: Netflix
+    careers_url: https://jobs.netflix.com
+    scan_method: websearch
+    scan_query: 'site:jobs.netflix.com "Frontend" OR "React" OR "UI Engineer"'
+    notes: "Top comp. Strong frontend org."
+    enabled: true
+
+  - name: Figma
+    careers_url: https://job-boards.greenhouse.io/figma
+    api: https://boards-api.greenhouse.io/v1/boards/figma/jobs
+    notes: "Design tool. Heavy React/TypeScript org."
+    enabled: true
+
+  - name: Linear
+    careers_url: https://jobs.ashbyhq.com/linear
+    scan_method: websearch
+    scan_query: 'site:jobs.ashbyhq.com/linear "Frontend" OR "Engineer"'
+    notes: "Remote-first. Renowned for frontend quality."
+    enabled: true
+
+  - name: Notion
+    careers_url: https://www.notion.so/careers
+    scan_method: websearch
+    scan_query: 'site:notion.so/careers "Frontend" OR "React" OR "UI Engineer"'
+    notes: "Remote-friendly. React/TypeScript heavy."
+    enabled: true
+
+  - name: Shopify
+    careers_url: https://job-boards.greenhouse.io/shopify
+    api: https://boards-api.greenhouse.io/v1/boards/shopify/jobs
+    notes: "Remote-first. Large React org. E-commerce platform."
+    enabled: true
+
+  - name: HubSpot
+    careers_url: https://job-boards.greenhouse.io/hubspot
+    api: https://boards-api.greenhouse.io/v1/boards/hubspot/jobs
+    notes: "Remote-friendly. Large frontend engineering org."
+    enabled: true
+
+  - name: Atlassian
+    careers_url: https://job-boards.greenhouse.io/atlassian
+    api: https://boards-api.greenhouse.io/v1/boards/atlassian/jobs
+    notes: "Remote-first. React/TypeScript heavy. Strong comp."
+    enabled: true
+
+  - name: Datadog
+    careers_url: https://job-boards.greenhouse.io/datadog
+    api: https://boards-api.greenhouse.io/v1/boards/datadog/jobs
+    notes: "Hybrid/remote. Frontend-heavy product."
+    enabled: true
+
+  - name: GitHub
+    careers_url: https://job-boards.greenhouse.io/github
+    api: https://boards-api.greenhouse.io/v1/boards/github/jobs
+    notes: "Remote-first. React/TypeScript. Developer tools."
+    enabled: true
+
+  - name: Plaid
+    careers_url: https://job-boards.greenhouse.io/plaid
+    api: https://boards-api.greenhouse.io/v1/boards/plaid/jobs
+    notes: "Fintech. Remote-friendly. React/TypeScript."
+    enabled: true
+
+  - name: Brex
+    careers_url: https://job-boards.greenhouse.io/brex
+    api: https://boards-api.greenhouse.io/v1/boards/brex/jobs
+    notes: "Fintech. Remote. React/TypeScript org."
+    enabled: true
+
+  - name: Gusto
+    careers_url: https://job-boards.greenhouse.io/gusto
+    api: https://boards-api.greenhouse.io/v1/boards/gusto/jobs
+    notes: "Payroll/HR SaaS. Remote-friendly. React heavy."
+    enabled: true
+
+  - name: Duolingo
+    careers_url: https://job-boards.greenhouse.io/duolingo
+    api: https://boards-api.greenhouse.io/v1/boards/duolingo/jobs
+    notes: "EdTech. React/TypeScript. Remote roles."
+    enabled: true
+
+  - name: Webflow
+    careers_url: https://job-boards.greenhouse.io/webflow
+    api: https://boards-api.greenhouse.io/v1/boards/webflow/jobs
+    notes: "No-code web platform. Frontend-heavy org. Remote-first."
+    enabled: true
+
+  - name: Miro
+    careers_url: https://job-boards.greenhouse.io/miro
+    api: https://boards-api.greenhouse.io/v1/boards/miro/jobs
+    notes: "Collaboration platform. Remote. React/TypeScript."
+    enabled: true
+
+  - name: Amplitude
+    careers_url: https://job-boards.greenhouse.io/amplitude
+    api: https://boards-api.greenhouse.io/v1/boards/amplitude/jobs
+    notes: "Analytics SaaS. React/TypeScript. Remote-friendly."
+    enabled: true
+
+  - name: Intercom
+    careers_url: https://job-boards.greenhouse.io/intercom
+    api: https://boards-api.greenhouse.io/v1/boards/intercom/jobs
+    notes: "Customer comms platform. React/TypeScript. Remote-friendly."
+    enabled: true
+
+  - name: Salesforce
+    careers_url: https://careers.salesforce.com
+    scan_method: websearch
+    scan_query: 'site:careers.salesforce.com "Frontend" OR "React" OR "UI Engineer"'
+    notes: "Large frontend org. Remote-friendly."
+    enabled: true
+
+  - name: Twilio
+    careers_url: https://job-boards.greenhouse.io/twilio
+    api: https://boards-api.greenhouse.io/v1/boards/twilio/jobs
+    notes: "Remote-friendly. Developer platform. React heavy."
+    enabled: true
+
+  # -- Healthcare Tech (Shreya's J&J background is a differentiator) --
+
+  - name: Oscar Health
+    careers_url: https://job-boards.greenhouse.io/oscar
+    api: https://boards-api.greenhouse.io/v1/boards/oscar/jobs
+    notes: "Health insurance tech. React. Remote-friendly."
+    enabled: true
+
+  - name: Ro
+    careers_url: https://job-boards.greenhouse.io/ro
+    api: https://boards-api.greenhouse.io/v1/boards/ro/jobs
+    notes: "Healthcare platform. React/TypeScript."
+    enabled: true
+
+  - name: Navan (TripActions)
+    careers_url: https://job-boards.greenhouse.io/navan
+    api: https://boards-api.greenhouse.io/v1/boards/navan/jobs
+    notes: "Travel & expense SaaS. React. Remote-friendly."
+    enabled: true
+
+  # -- Dev Tools (love strong frontend engineers) --
+
+  - name: Vercel
+    careers_url: https://job-boards.greenhouse.io/vercel
+    api: https://boards-api.greenhouse.io/v1/boards/vercel/jobs
+    notes: "Frontend cloud. Next.js creator. Remote-first. Dream employer for React engineers."
+    enabled: true
+
+  - name: Supabase
+    careers_url: https://jobs.ashbyhq.com/supabase
+    scan_method: websearch
+    scan_query: 'site:jobs.ashbyhq.com/supabase "Frontend" OR "React" OR "Engineer"'
+    notes: "Open-source Firebase alt. Remote-first. React/TypeScript."
+    enabled: true
+
+  - name: Resend
+    careers_url: https://jobs.ashbyhq.com/resend
+    scan_method: websearch
+    scan_query: 'site:jobs.ashbyhq.com/resend'
+    notes: "Email API for devs. Remote-first. React heavy."
+    enabled: true
+
+  - name: Clerk
+    careers_url: https://jobs.ashbyhq.com/clerk
+    scan_method: websearch
+    scan_query: 'site:jobs.ashbyhq.com/clerk "Frontend" OR "React" OR "Engineer"'
+    notes: "Auth platform for devs. React/TypeScript."
+    enabled: true
+
+  - name: WorkOS
+    careers_url: https://jobs.ashbyhq.com/workos
+    scan_method: websearch
+    scan_query: 'site:jobs.ashbyhq.com/workos "Frontend" OR "Engineer"'
+    notes: "Enterprise auth APIs. Developer tools. React."
+    enabled: true
+
+  - name: Retool
+    careers_url: https://retool.com/careers
+    scan_method: websearch
+    scan_query: 'site:retool.com/careers "Frontend" OR "React" OR "UI Engineer"'
+    notes: "Internal tools builder. React-heavy. Remote-friendly."
+    enabled: true
+
+  - name: Airtable
+    careers_url: https://job-boards.greenhouse.io/airtable
+    api: https://boards-api.greenhouse.io/v1/boards/airtable/jobs
+    notes: "No-code + AI platform. React org."
+    enabled: true
+
+  - name: Temporal
+    careers_url: https://job-boards.greenhouse.io/temporal
+    api: https://boards-api.greenhouse.io/v1/boards/temporal/jobs
+    notes: "Workflow orchestration. React/TypeScript."
+    enabled: true
+
+  - name: Glean
+    careers_url: https://job-boards.greenhouse.io/gleanwork
+    api: https://boards-api.greenhouse.io/v1/boards/gleanwork/jobs
+    notes: "Enterprise AI search. React frontend."
+    enabled: true
+
+  - name: Hightouch
+    careers_url: https://job-boards.greenhouse.io/hightouch
+    api: https://boards-api.greenhouse.io/v1/boards/hightouch/jobs
+    notes: "Data activation platform. React/TypeScript."
+    enabled: true
+
+  - name: Contentful
+    careers_url: https://job-boards.greenhouse.io/contentful
+    api: https://boards-api.greenhouse.io/v1/boards/contentful/jobs
+    notes: "Headless CMS. Berlin / Denver. React/TypeScript."
+    enabled: true
+
+  # -- AI companies that also hire strong frontend engineers --
+
+  - name: Anthropic
+    careers_url: https://job-boards.greenhouse.io/anthropic
+    api: https://boards-api.greenhouse.io/v1/boards/anthropic/jobs
+    enabled: true
+
+  - name: OpenAI
+    careers_url: https://openai.com/careers
+    scan_method: websearch
+    scan_query: 'site:openai.com/careers "Frontend" OR "React" OR "UI Engineer"'
+    enabled: true
+
+  - name: Perplexity
+    careers_url: https://jobs.ashbyhq.com/perplexity
+    scan_method: websearch
+    scan_query: 'site:jobs.ashbyhq.com/perplexity "Frontend" OR "React" OR "Engineer"'
+    notes: "AI-native search. React frontend."
+    enabled: true
+
+  - name: ElevenLabs
+    careers_url: https://jobs.ashbyhq.com/elevenlabs
+    scan_method: websearch
+    scan_query: 'site:jobs.ashbyhq.com/elevenlabs "Frontend" OR "React" OR "Engineer"'
+    notes: "Voice AI. React/TypeScript frontend."
+    enabled: true
+
+  - name: Cohere
+    careers_url: https://jobs.ashbyhq.com/cohere
+    scan_method: websearch
+    scan_query: 'site:jobs.ashbyhq.com/cohere "Frontend" OR "React" OR "UI"'
+    notes: "AI/LLM provider. Toronto + remote."
+    enabled: true
+
+  - name: Runway
+    careers_url: https://job-boards.greenhouse.io/runwayml
+    api: https://boards-api.greenhouse.io/v1/boards/runwayml/jobs
+    notes: "Generative AI video. React-heavy creative frontend."
+    enabled: true
+
+  - name: Synthesia
+    careers_url: https://jobs.ashbyhq.com/synthesia
+    scan_method: websearch
+    scan_query: 'site:jobs.ashbyhq.com/synthesia "Frontend" OR "React" OR "Engineer"'
+    notes: "AI video generation. React/TypeScript."
+    enabled: true
+
+  # -- Fintech (Shreya's Citi background is a differentiator) --
+
+  - name: Robinhood
+    careers_url: https://job-boards.greenhouse.io/robinhood
+    api: https://boards-api.greenhouse.io/v1/boards/robinhood/jobs
+    notes: "Fintech. React/TypeScript. Remote-friendly."
+    enabled: true
+
+  - name: Chime
+    careers_url: https://job-boards.greenhouse.io/chime
+    api: https://boards-api.greenhouse.io/v1/boards/chime/jobs
+    notes: "Neobank. React/TypeScript. Remote-friendly."
+    enabled: true
+
+  - name: Rippling
+    careers_url: https://job-boards.greenhouse.io/rippling
+    api: https://boards-api.greenhouse.io/v1/boards/rippling/jobs
+    notes: "HR/Fintech SaaS. React heavy. Strong comp."
+    enabled: true
+
+  - name: Affirm
+    careers_url: https://job-boards.greenhouse.io/affirm
+    api: https://boards-api.greenhouse.io/v1/boards/affirm/jobs
+    notes: "Fintech BNPL. React/TypeScript. Remote."
+    enabled: true
+
+  - name: N26
+    careers_url: https://job-boards.greenhouse.io/n26
+    api: https://boards-api.greenhouse.io/v1/boards/n26/jobs
+    notes: "Berlin. Mobile bank. React/TypeScript."
+    enabled: true
+
+  - name: Spotify
+    careers_url: https://jobs.lever.co/spotify
+    notes: "Stockholm / NYC / London. Large React/TypeScript org."
+    enabled: true

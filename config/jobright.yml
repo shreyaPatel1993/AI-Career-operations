@@ -1,0 +1,25 @@
+# Jobright.ai API Configuration
+# SECURITY: This file is gitignored. Never commit it.
+#
+# To refresh cookies:
+# 1. Log into jobright.ai in Chrome
+# 2. Open DevTools → Network → find any /swan/ request
+# 3. Right-click → Copy → Copy as cURL
+# 4. Paste the cookie string below (everything after "cookie: ")
+
+api:
+  base_url: "https://jobright.ai/swan/recommend/list/jobs"
+  params:
+    refresh: true
+    sortCondition: 1       # 1 = newest first (recency sort)
+    count: 20              # jobs per page (matches original API request)
+    syncRerank: false
+
+auth:
+  # Only SESSION_ID is needed. Paste just the value (no "SESSION_ID=" prefix needed).
+  # To refresh: DevTools → Network → any /swan/ request → Headers → copy SESSION_ID value
+  session_id: "5acfc06b251047dc850a9a6fb4f0a61a"
+
+settings:
+  pages: 4           # How many pages to fetch per scan (4 × 20 = 80 jobs)
+  max_age_days: 2    # Only surface jobs posted within 2 days (recency strategy)

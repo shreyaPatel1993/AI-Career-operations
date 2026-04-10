@@ -1,0 +1,40 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(node update-system.mjs check)",
+      "WebFetch(domain:boards-api.greenhouse.io)",
+      "WebSearch",
+      "WebFetch(domain:job-boards.greenhouse.io)",
+      "Bash(node jobright-fetch.mjs --dry-run)",
+      "Bash(node jobright-fetch.mjs --dry-run --debug)",
+      "Bash(node -e ':*)",
+      "Bash(node jobright-fetch.mjs)",
+      "Bash(node merge-tracker.mjs)",
+      "Bash(node /Users/shreya/Downloads/career-ops-main/generate-pdf.mjs /tmp/cv-shreya-orpine.html /Users/shreya/Downloads/career-ops-main/output/cv-shreya-orpine-2026-04-10.pdf --format=letter)",
+      "Bash(npm install:*)",
+      "Bash(npx playwright:*)",
+      "Bash(curl -s \"https://boards-api.greenhouse.io/v1/boards/thrivecart/jobs/5181924008?questions=true\")",
+      "Bash(python3 -m json.tool)",
+      "Bash(node /Users/shreya/Downloads/career-ops-main/generate-pdf.mjs /tmp/cv-shreya-base.html /Users/shreya/Downloads/career-ops-main/output/cv-shreya-base-2026-04-10.pdf --format=letter)",
+      "Bash(node --input-type=module)",
+      "Bash(curl -s \"https://boards-api.greenhouse.io/v1/boards/rxvantage/jobs/5599280004?questions=true\")",
+      "Bash(xargs -I{} node stealth-apply.mjs \"{}\" --dry-run)",
+      "Bash(node stealth-apply.mjs \"https://job-boards.greenhouse.io/embed/job_app?for=rxvantage&jr_id=68842112b54cac0f1e73c229&token=5599280004\" --dry-run)",
+      "Bash(node stealth-apply.mjs \"https://job-boards.greenhouse.io/embed/job_app?for=rxvantage&jr_id=68842112b54cac0f1e73c229&token=5599280004\" --pdf=output/cv-shreya-base-2026-04-10.pdf)",
+      "Bash(node stealth-apply.mjs \"https://job-boards.greenhouse.io/embed/job_app?for=rxvantage&token=5599280004\" --dry-run)",
+      "Bash(npm run:*)",
+      "Bash(pkill -f \"stealth-apply.mjs\")",
+      "Bash(node stealth-apply.mjs \"https://job-boards.greenhouse.io/embed/job_app?for=rxvantage&token=5599280004\" --code=Q783GBHb --dry-run)",
+      "Bash(open /Users/shreya/Downloads/career-ops-main/output/screenshots/apply-rxvantage-post-submit-2026-04-10.png)",
+      "Bash(ls /Users/shreya/Downloads/career-ops-main/*.mjs)",
+      "Bash(node /Users/shreya/Downloads/career-ops-main/update-system.mjs check)",
+      "Bash(echo \"exit: $?\")",
+      "Bash(ls -t /Users/shreya/Downloads/career-ops-main/output/*.pdf)",
+      "Bash(gh auth:*)",
+      "Bash(git init:*)",
+      "Bash(git config:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)"
+    ]
+  }
+}

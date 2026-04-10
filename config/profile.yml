@@ -1,0 +1,75 @@
+# Career-Ops Profile Configuration
+# Shreya Patel — Senior Frontend Engineer
+
+candidate:
+  full_name: "Shreya Patel"
+  email: "koladiashreya1993@gmail.com"
+  phone: "+1-201-989-8561"
+  location: "United States"
+  timezone: "ET"
+  linkedin: "linkedin.com/in/shreya-patel5"
+  portfolio_url: "https://portfolio-lemon-rho-euxnt7n9ya.vercel.app/"
+  github: "https://github.com/shreyaPatel1993"
+  visa_status: "US Citizen — no sponsorship needed"
+
+target_roles:
+  primary:
+    - "Senior Frontend Engineer"
+    - "Frontend Engineer"
+    - "Fullstack Engineer"
+    - "React Developer"
+    - "UI Developer"
+    - "Web Developer"
+  archetypes:
+    - name: "Senior Frontend Engineer"
+      level: "Senior/Staff"
+      fit: "primary"
+    - name: "Frontend Engineer"
+      level: "mid level"
+      fit: "primary"
+    - name: "Full Stack Engineer"
+      level: "Senior"
+      fit: "secondary"
+    - name: "Frontend Developer"
+      level: "Senior"
+      fit: "adjacent"  
+    - name: "UI Developer"
+      level: "Senior"
+      fit: "adjacent"
+    - name: "Web Developer"
+      level: "Senior"
+      fit: "adjacent"
+
+narrative:
+  headline: "Senior Frontend Engineer — React, TypeScript, performance-first, AI-accelerated delivery"
+  exit_story: "7+ years building high-scale frontend systems across Healthcare, Fintech, Automotive, and E-commerce. Led teams of 5, served 20M+ users at Citi, and reduced delivery time 30% using AI-assisted workflows (Claude Code, Copilot)."
+  superpowers:
+    - "React 18 performance optimization (20% load time improvements, Core Web Vitals)"
+    - "Reusable component architecture that scales across teams"
+    - "AI-assisted development — real practitioner with Claude Code and GitHub Copilot"
+    - "Leading frontend teams and driving architectural standards"
+    - "Cross-domain experience: Healthcare, Fintech, Retail, Automotive"
+  proof_points:
+    - name: "J&J Vaccination Platform"
+      hero_metric: "10K+ daily users, 25% code duplication reduction, team of 5 led"
+    - name: "Citi Banking Dashboard"
+      hero_metric: "20M+ users, 1.8s page load reduction, 99% CI/CD success rate"
+    - name: "AI-Assisted Delivery"
+      hero_metric: "~30% faster feature delivery using Claude + Copilot"
+    - name: "Portfolio"
+      url: "https://portfolio-lemon-rho-euxnt7n9ya.vercel.app/"
+      hero_metric: "Live portfolio with project showcases"
+
+compensation:
+  target_range: "$130K-180K"
+  currency: "USD"
+  minimum: "$120K"
+  location_flexibility: "Remote preferred, open to hybrid or onsite"
+  employment_type: "FTE preferred, W2 contract acceptable"
+  goal: "Maximize interview volume — apply broadly across all fitting archetypes"
+
+location:
+  country: "United States"
+  timezone: "ET"
+  visa_status: "US Citizen"
+  remote_preference: "Remote preferred"

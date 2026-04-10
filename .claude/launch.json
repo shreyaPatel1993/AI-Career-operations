@@ -1,0 +1,29 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "Dashboard (TUI)",
+      "runtimeExecutable": "go",
+      "runtimeArgs": ["run", "./dashboard"],
+      "port": null
+    },
+    {
+      "name": "Doctor (diagnostics)",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["doctor.mjs"],
+      "port": null
+    },
+    {
+      "name": "Liveness check",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["check-liveness.mjs"],
+      "port": null
+    },
+    {
+      "name": "Verify pipeline",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["verify-pipeline.mjs"],
+      "port": null
+    }
+  ]
+}
