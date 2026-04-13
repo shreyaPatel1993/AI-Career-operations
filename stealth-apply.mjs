@@ -28,6 +28,7 @@ import { readFileSync, writeFileSync, readdirSync, existsSync, mkdirSync, create
 import { resolve, join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { createInterface } from 'readline';
+import { fetchVerificationCodeFromGmail } from './gmail-helper.mjs';
 import { tmpdir } from 'os';
 import yaml from 'js-yaml';
 import { fillVerificationCode } from './lib/email-verifier.mjs';
@@ -318,113 +319,6 @@ async function humanBehavior(page) {
   console.log('  ✅ Behavior simulation complete');
 }
 
-// ─── OPTION B: reCAPTCHA v2 AUDIO SOLVER (Whisper, free, no API key) ─────────
-//
-// Strategy: click checkbox → if challenge appears → click audio button →
-// download .mp3 → transcribe with @xenova/transformers (Whisper in Node.js) →
-// type answer → submit.
-//
-// Requires: npm install @xenova/transformers  (first run downloads ~80MB model)
-
-async function solveRecaptchaV2(page) {
-  // Detect reCAPTCHA v2 iframe
-  const frames = page.frames();
-  const captchaFrame = frames.find(f => f.url().includes('recaptcha') && f.url().includes('anchor'));
-  if (!captchaFrame) return false; // No v2 captcha on this page
-
-  console.log('\n🔒 reCAPTCHA v2 detected — attempting audio solve...');
-
-  try {
-    // Wait for frame to fully load before interacting
-    await captchaFrame.waitForLoadState('domcontentloaded').catch(() => {});
-    await page.waitForTimeout(2000);
-
-    // Click the checkbox
-    await captchaFrame.waitForSelector('#recaptcha-anchor', { timeout: 15000 });
-    await captchaFrame.click('#recaptcha-anchor');
-    await page.waitForTimeout(randomBetween(1500, 2500));
-
-    // Check if already solved (no challenge frame appeared)
-    const checkboxState = await captchaFrame.$('#recaptcha-anchor[aria-checked="true"]');
-    if (checkboxState) {
-      console.log('  ✅ reCAPTCHA v2 solved (no challenge)');
-      return true;
-    }
-
-    // Find the challenge iframe
-    const challengeFrame = page.frames().find(f => f.url().includes('recaptcha') && f.url().includes('bframe'));
-    if (!challengeFrame) {
-      console.log('  ⚠ Challenge frame not found — may need manual solve');
-      return false;
-    }
-
-    // Click the audio button
-    await challengeFrame.waitForSelector('#recaptcha-audio-button', { timeout: 5000 });
-    await challengeFrame.click('#recaptcha-audio-button');
-    await page.waitForTimeout(randomBetween(1000, 1800));
-
-    // Get the audio challenge URL
-    const audioSrc = await challengeFrame.evaluate(() => {
-      const el = document.querySelector('.rc-audiochallenge-tdownload-link, #audio-source');
-      return el?.href || el?.src || null;
-    });
-
-    if (!audioSrc) {
-      console.log('  ⚠ Could not find audio challenge URL');
-      return false;
-    }
-
-    console.log('  📥 Downloading audio challenge...');
-
-    // Download the audio file
-    const audioPath = join(tmpdir(), `recaptcha-audio-${Date.now()}.mp3`);
-    const audioData = await page.evaluate(async (url) => {
-      const res = await fetch(url);
-      const buf = await res.arrayBuffer();
-      return Array.from(new Uint8Array(buf));
-    }, audioSrc);
-    writeFileSync(audioPath, Buffer.from(audioData));
-
-    // Transcribe with Whisper (@xenova/transformers)
-    console.log('  🎙 Transcribing with Whisper (first run downloads model ~80MB)...');
-    let transcription = '';
-    try {
-      const { pipeline } = await import('@xenova/transformers');
-      const transcriber = await pipeline('automatic-speech-recognition', 'Xenova/whisper-tiny.en');
-      const result = await transcriber(audioPath);
-      transcription = result.text.trim().toLowerCase().replace(/[^a-z0-9 ]/g, '');
-      console.log(`  📝 Transcription: "${transcription}"`);
-    } catch (whisperErr) {
-      console.log(`  ⚠ Whisper not available (${whisperErr.message})`);
-      console.log('  💡 Install with: npm install @xenova/transformers');
-      console.log('  ⏸  Pausing for manual CAPTCHA solve (30s)...');
-      await page.waitForTimeout(30000);
-      return false;
-    }
-
-    // Type the transcription into the audio response field
-    await challengeFrame.waitForSelector('#audio-response', { timeout: 5000 });
-    await challengeFrame.fill('#audio-response', transcription);
-    await page.waitForTimeout(randomBetween(500, 900));
-
-    // Verify
-    await challengeFrame.click('#recaptcha-verify-button');
-    await page.waitForTimeout(randomBetween(1500, 2500));
-
-    // Check if solved
-    const solved = await captchaFrame.$('#recaptcha-anchor[aria-checked="true"]');
-    if (solved) {
-      console.log('  ✅ reCAPTCHA v2 solved via audio!');
-      return true;
-    } else {
-      console.log('  ⚠ Audio solve failed — retrying not implemented. Try --headless=false for manual solve.');
-      return false;
-    }
-  } catch (err) {
-    console.log(`  ⚠ reCAPTCHA solve error: ${err.message}`);
-    return false;
-  }
-}
 
 // ─── ATS ACCOUNT STORE ───────────────────────────────────────────────────────
 
@@ -1757,9 +1651,6 @@ async function run() {
       return;
     }
 
-    // ── Option B: reCAPTCHA v2 audio solve (if v2 checkbox detected) ──
-    await solveRecaptchaV2(page);
-
     // ── Find submit button ──
     const submitBtn = await findSubmitButton(page);
     if (!submitBtn) {
@@ -1789,6 +1680,40 @@ async function run() {
       return;
     }
 
+    // ── Pre-submit security code check (some Greenhouse forms delay showing the code field) ──
+    const securityCodeSelectors = [
+      '#security_code',
+      'input[id*="security" i]',
+      'input[placeholder*="security" i]',
+      'input[placeholder*="verification" i]',
+      'input[placeholder*="code" i]',
+    ];
+    for (const sel of securityCodeSelectors) {
+      const el = await page.$(sel);
+      if (el && await el.isVisible()) {
+        let codeToFill = securityCode;
+
+        // If no code provided, try to fetch from Gmail
+        if (!codeToFill) {
+          try {
+            console.log(`\n  ⚠️ Security code field appeared at submission time!`);
+            codeToFill = await fetchVerificationCodeFromGmail();
+          } catch (gmailErr) {
+            console.log(`\n  ❌ Could not fetch code from Gmail: ${gmailErr.message}`);
+            console.log('  Re-run with: --code=XXXXXXXX (or check your email manually)');
+            await browser.close();
+            return;
+          }
+        }
+
+        if (codeToFill) {
+          await humanType(page, sel, codeToFill, { optional: true });
+          console.log(`  ✅ Security code filled: ${codeToFill}`);
+        }
+        break;
+      }
+    }
+
     // ── Submit with human-like click (move to button naturally, then click) ──
     if (submitBtn) {
       // One more natural mouse move to the button right before clicking
@@ -1799,15 +1724,101 @@ async function run() {
       }
 
       console.log('\n📤 Submitting...');
+      const submitClickedAt = Date.now(); // timestamp for Gmail — only fetch code from THIS email
       await submitBtn.click();
-      await page.waitForTimeout(5000);
+      await page.waitForTimeout(3000);
 
-      // Check for confirmation
-      const pageText = await page.innerText('body');
-      const confirmed = pageText.toLowerCase().match(/thank you|application received|submitted|confirmation|success/);
+      // ── Post-submit: Greenhouse may show split single-char verification inputs ──
+      const splitInputs = await page.$$('input[id^="security-input-"]');
+      const visibleSplitInputs = [];
+      for (const el of splitInputs) {
+        if (await el.isVisible()) visibleSplitInputs.push(el);
+      }
+
+      let postSubmitCodeFilled = false;
+
+      if (visibleSplitInputs.length > 0) {
+        console.log('\n  📧 Verification code required — fetching from Gmail...');
+        let codeToFill = securityCode;
+        if (!codeToFill) {
+          try {
+            codeToFill = await fetchVerificationCodeFromGmail({
+              maxWaitMs: 30000,
+              pollIntervalMs: 4000,
+              afterMs: submitClickedAt,  // only accept email that arrived AFTER submit click
+            });
+          } catch (gmailErr) {
+            console.log(`\n  ❌ Could not fetch code from Gmail: ${gmailErr.message}`);
+            console.log('  Re-run with: --code=XXXXXXXX');
+            await browser.close();
+            return;
+          }
+        }
+
+        // Type each character with keyboard events (React inputs require this)
+        await visibleSplitInputs[0].click();
+        await page.waitForTimeout(100);
+        for (const char of codeToFill.slice(0, visibleSplitInputs.length)) {
+          await page.keyboard.type(char, { delay: 80 });
+        }
+        console.log(`  ✅ Code typed: ${codeToFill}. Re-submitting...`);
+
+        await page.waitForTimeout(500);
+        const submitBtn2 = await findSubmitButton(page);
+        if (submitBtn2) await submitBtn2.click();
+
+        // Wait up to 10s for the page to settle after code submission.
+        // Poll every 500ms so we catch errors/confirmations as soon as they render.
+        let settled = false;
+        for (let i = 0; i < 20 && !settled; i++) {
+          await page.waitForTimeout(500);
+          const t = (await page.innerText('body').catch(() => '')).toLowerCase();
+          if (t.match(/invalid|wrong|incorrect|expired|did not match|resend|try again|error|thank you|application received|we.ll be in touch|your application has been/)) {
+            settled = true;
+          }
+        }
+        postSubmitCodeFilled = true;
+      }
+
+      if (!postSubmitCodeFilled) {
+        // Give the page time to settle even when no split inputs were present
+        await page.waitForTimeout(4000);
+      }
+
+      // ── Confirmation check ────────────────────────────────────────────────
+      // Fetch body text fresh — do NOT reuse stale text from before re-submit.
+      const pageText = await page.innerText('body').catch(() => '');
+      const pageTextLower = pageText.toLowerCase();
+
+      // Broad error patterns — Greenhouse shows these on wrong/expired code
+      const hasError = pageTextLower.match(
+        /invalid.*code|wrong.*code|incorrect.*code|code.*invalid|code.*expired|expired.*code|did not match|code is incorrect|resend.*code|please.*try again|submission.*error|we encountered an error|something went wrong/
+      );
+
+      // Only call it a success if we see a proper confirmation AND the
+      // verification code field is no longer visible (if it reappears, the
+      // code was rejected and the form is still open).
+      const hasConfirmText = pageTextLower.match(
+        /thank you|application received|we.ll be in touch|your application has been|successfully submitted/
+      );
+      const codeFieldStillVisible = await page.$('#security_code, input[id*="security" i], input[id^="security-input-"]')
+        .then(el => el ? el.isVisible().catch(() => false) : false)
+        .catch(() => false);
+      const confirmed = hasConfirmText && !hasError && !codeFieldStillVisible;
 
       if (confirmed) {
         console.log('\n🎉 Application submitted successfully!');
+      } else if (hasError) {
+        const postPath = await screenshot(page, `${company}-post-submit-error`);
+        console.log(`\n❌ Submission failed — verification code was rejected.`);
+        console.log(`   Error detected on page. Screenshot: ${postPath}`);
+        console.log('   The code entered was: ' + (securityCode || '(fetched from Gmail)'));
+        console.log('   Try again with the fresh code from your inbox: --code=XXXXXXXX');
+      } else if (codeFieldStillVisible) {
+        const postPath = await screenshot(page, `${company}-post-submit-needscode`);
+        console.log(`\n❌ Submission failed — verification code field is still showing.`);
+        console.log(`   Screenshot: ${postPath}`);
+        console.log('   Run again with: --code=YYYYYYYY (get the latest code from your inbox)');
       } else {
         const postPath = await screenshot(page, `${company}-post-submit`);
         console.log(`\n⚠ Could not confirm submission. Check screenshot: ${postPath}`);
@@ -1830,7 +1841,6 @@ export {
   resolveGreenhouseUrl,
   findResumePDF,
   humanBehavior,
-  solveRecaptchaV2,
   findSubmitButton,
   screenshot,
   humanType,

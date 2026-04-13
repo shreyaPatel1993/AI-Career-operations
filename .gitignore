@@ -32,10 +32,19 @@ npm-debug.log*
 dist/
 build/
 
+# Test files
+playwright.config.mjs
+vitest.config.mjs
+test-results/
+tests/
+testsprite_tests/
+
 # Personal Data, Tracking & Credentials
 cv.md
 config/profile.yml
 config/form-answers.yml
+config/gmail-oauth.json
+config/.gmail-token.json
 data/*.md
 data/*.tsv
 reports/*.md

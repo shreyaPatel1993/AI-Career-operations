@@ -34,7 +34,7 @@ import yaml from 'js-yaml';
 
 import {
   PORTALS, loadCandidate, detectPortal, resolveGreenhouseUrl,
-  findResumePDF, humanBehavior, solveRecaptchaV2, findSubmitButton,
+  findResumePDF, humanBehavior, findSubmitButton,
   screenshot, randomBetween,
 } from './stealth-apply.mjs';
 
@@ -343,9 +343,6 @@ async function applyToJob(offer, { headless, dryRun, formAnswers, logger, gmailT
 
     // Human behavior (reCAPTCHA v3 score boost)
     await humanBehavior(page);
-
-    // reCAPTCHA v2 audio solve if needed
-    await solveRecaptchaV2(page);
 
     // Find submit button
     const submitBtn = await findSubmitButton(page);

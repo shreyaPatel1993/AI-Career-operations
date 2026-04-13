@@ -47,6 +47,7 @@
     "vitest": "^4.1.4"
   },
   "dependencies": {
+    "googleapis": "^118.0.0",
     "js-yaml": "^4.1.1",
     "playwright-extra": "^4.3.6",
     "puppeteer-extra-plugin-stealth": "^2.11.2"
