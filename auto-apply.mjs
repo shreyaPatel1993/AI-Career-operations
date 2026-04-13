@@ -520,3 +520,31 @@ run().catch(err => {
   console.error('Fatal:', err.message);
   process.exit(1);
 });
+
+// ─── EXPORTS (for unit testing) ───────────────────────────────────────────────
+
+/**
+ * Filter applications by score threshold, deduplication, and terminal status.
+ * Extracted from run() for testability.
+ */
+function filterByScore(allOffers, threshold = DEFAULT_THRESHOLD) {
+  const effectiveThreshold = Math.max(threshold, SCORE_FLOOR);
+  const normalize = s => s.toLowerCase().replace(/[-–—/\\,.()'":]/g, ' ').replace(/\s+/g, ' ').trim();
+  const jobKey = o => `${normalize(o.company)}|${normalize(o.role)}`;
+  const queuedThisRun = new Set();
+
+  return allOffers.filter(o => {
+    if (o.status !== 'Evaluated') return false;
+    if (o.score < effectiveThreshold) return false;
+
+    const key = jobKey(o);
+    const terminalExists = allOffers.some(x => jobKey(x) === key && TERMINAL_STATUSES.has(x.status));
+    if (terminalExists) return false;
+    if (queuedThisRun.has(key)) return false;
+
+    queuedThisRun.add(key);
+    return true;
+  });
+}
+
+export { parseApplications, parseReport, filterByScore, lookupAnswer };

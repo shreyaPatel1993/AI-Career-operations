@@ -695,6 +695,9 @@ const PORTALS = {
     // ── Decision engine ──────────────────────────────────────────────────────
     function decide(q) {
       if (!q) return null;
+      // Phone number
+      if (q === 'phone' || q.includes('phone number') || q.includes('mobile number') || q.includes('cell phone'))
+                                                                      return { type: 'text', value: candidate.phoneFormatted };
       // Profile links
       if (q.includes('linkedin') || q.includes('linked in'))         return { type: 'text', value: candidate.linkedin };
       if (q.includes('portfolio') || q.includes('personal website') || q.includes('personal site'))
@@ -834,7 +837,8 @@ const PORTALS = {
       }
 
       if (decision.type === 'years') {
-        await PORTALS._selectYearsOption(page, el, decision.value ?? decision.answer);
+        const filled = await PORTALS._selectYearsOption(page, el, decision.value ?? decision.answer);
+        if (!filled) console.log(`  ⚠ [years-fail] ${q.slice(0, 60)}: could not fill`);
       } else if (decision.type === 'text') {
         await el.fill(decision.value ?? decision.answer);
         console.log(`  ✅ [text] ${q.slice(0, 60)}: ${(decision.value ?? decision.answer).slice(0, 60)}`);
@@ -888,6 +892,78 @@ const PORTALS = {
         console.log(`  ✅ [checkbox] ${q.slice(0, 70)}...`);
       }
     }
+
+    // ── 5. Catch-all: number inputs + text inputs not covered by question_ IDs ─
+    // Greenhouse new Remix board sometimes renders years/experience fields as
+    // input[type="number"] or plain inputs with non-question_ IDs.
+    const handledIds = new Set([
+      'resume', 'cover_letter', 'first_name', 'last_name', 'email', 'phone',
+      'school--0', 'degree--0', 'discipline--0', 'school_name_0', 'degree_0', 'discipline_0',
+      'candidate-location',
+    ]);
+    const broadInputs = await page.$$(
+      'input[type="number"]:not([type="radio"]):not([type="checkbox"]),' +
+      'input[type="text"]:not([id^="question_"]):not([type="radio"]):not([type="checkbox"]),' +
+      'select:not([id^="question_"])'
+    );
+    for (const el of broadInputs) {
+      const id = await el.getAttribute('id').catch(() => '');
+      if (!id || handledIds.has(id) || id.startsWith('question_') ||
+          id.startsWith('school') || id.startsWith('degree') || id.startsWith('discipline') ||
+          id.startsWith('iti__') || id === 'candidate-location') continue;
+      const visible = await el.isVisible().catch(() => false);
+      if (!visible) continue;
+      const q = await getQuestionText(el);
+      if (!q) continue;
+      let decision = decide(q);
+      if (!decision) {
+        const saved = lookupFormAnswer(q, formAnswers);
+        if (saved) decision = saved;
+      }
+      if (!decision) {
+        if (q && unanswered) {
+          unanswered.push(q);
+          console.log(`  ⚠ [unanswered — needs manual] ${q.slice(0, 80)}`);
+        }
+        continue;
+      }
+      const tagName = await el.evaluate(e => e.tagName.toLowerCase());
+      if (decision.type === 'years') {
+        if (tagName === 'select') {
+          // Native select for years range
+          const options = await el.evaluate(e => [...e.options].map(o => ({ text: o.text.trim(), value: o.value })));
+          const years = decision.value ?? decision.answer;
+          const match = options.find(o => {
+            const t = o.text.toLowerCase();
+            const n = parseInt(o.text.match(/(\d+)/)?.[1] ?? '0');
+            return n <= years && (t.includes('+') || t.includes('more') || n === years);
+          }) || options.filter(o => parseInt(o.text.match(/(\d+)/)?.[1] ?? '0') <= years).pop();
+          if (match) {
+            await el.selectOption({ value: match.value });
+            console.log(`  ✅ [broad-select-years] ${q.slice(0, 60)}: ${match.text}`);
+          }
+        } else {
+          await PORTALS._selectYearsOption(page, el, decision.value ?? decision.answer);
+        }
+      } else if (decision.type === 'text') {
+        await el.fill(decision.value ?? decision.answer);
+        console.log(`  ✅ [broad-text] ${q.slice(0, 60)}: ${(decision.value ?? decision.answer).slice(0, 60)}`);
+      } else if (decision.type === 'yesno' || decision.type === 'select') {
+        if (tagName === 'select') {
+          const options = await el.evaluate(e => [...e.options].map(o => ({ text: o.text.trim(), value: o.value })));
+          const answerVal = decision.value ?? decision.answer;
+          const match = options.find(o => o.text.toLowerCase() === answerVal.toLowerCase())
+            || options.find(o => o.text.toLowerCase().includes(answerVal.toLowerCase()));
+          if (match) {
+            await el.selectOption({ value: match.value });
+            console.log(`  ✅ [broad-select] ${q.slice(0, 60)}: ${match.text}`);
+          }
+        } else {
+          await PORTALS._selectComboOption(page, el, decision.value ?? decision.answer);
+          console.log(`  ✅ [broad-combo] ${q.slice(0, 60)}: ${decision.value ?? decision.answer}`);
+        }
+      }
+    }
   },
 
   // Opens a years-of-experience dropdown, reads the options, and picks the
@@ -898,7 +974,11 @@ const PORTALS = {
       await page.waitForTimeout(500);
       await page.waitForSelector('[role="option"]', { timeout: 3000 }).catch(() => {});
 
-      const opts = await page.$$('[role="option"]');
+      const allOpts = await page.$$('[role="option"]');
+      const opts = [];
+      for (const o of allOpts) {
+        if (await o.isVisible().catch(() => false)) opts.push(o);
+      }
       if (!opts.length) {
         // No dropdown appeared — this is a plain <input type="text">, fill directly
         await inputEl.fill(String(years));
