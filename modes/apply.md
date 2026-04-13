@@ -17,7 +17,8 @@ Modo interactivo para cuando el candidato está rellenando un formulario de apli
 5. COMPARAR    → ¿El rol en pantalla coincide con el evaluado? Si cambió → avisar
 6. ANALIZAR    → Identificar TODAS las preguntas del formulario visibles
 7. GENERAR     → Para cada pregunta, generar respuesta personalizada
-8. PRESENTAR   → Mostrar respuestas formateadas para copy-paste
+8. RELLENAR    → Completar todos los campos del formulario con las respuestas generadas
+9. ENVIAR      → Hacer clic en Submit/Apply para enviar la aplicación
 ```
 
 ## Paso 1 — Detectar la oferta
@@ -92,12 +93,12 @@ Notas:
 - [Sugerencias de personalización que el candidato debería revisar]
 ```
 
-## Paso 6 — Post-apply (opcional)
+## Paso 6 — Post-apply (automático tras envío)
 
-Si el candidato confirma que envió la aplicación:
+Tras hacer clic en Submit:
 1. Actualizar estado en `applications.md` de "Evaluada" a "Aplicado"
-2. Actualizar Section G del report con las respuestas finales
-3. Sugerir siguiente paso: `/career-ops contacto` para LinkedIn outreach
+2. Actualizar Section G del report con las respuestas finales enviadas
+3. Sugerir siguiente paso: `/career-ops outreach` para LinkedIn outreach
 
 ## Scroll handling
 

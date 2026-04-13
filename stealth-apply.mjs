@@ -14,6 +14,7 @@
  *   --headless=false      Show browser window (default: true)
  *   --dry-run             Fill form but do NOT submit — screenshot only
  *   --salary="$140K-$160K"  Override salary answer
+ *   --company=name        Override company slug (needed for Greenhouse embed token URLs)
  *
  * Examples:
  *   node stealth-apply.mjs "https://job-boards.greenhouse.io/embed/job_app?for=rxvantage&token=5599280004"
@@ -23,12 +24,13 @@
 
 import { chromium } from 'playwright-extra';
 import StealthPlugin from 'puppeteer-extra-plugin-stealth';
-import { readFileSync, writeFileSync, readdirSync, existsSync, mkdirSync, createWriteStream } from 'fs';
+import { readFileSync, writeFileSync, readdirSync, existsSync, mkdirSync, createWriteStream, statSync } from 'fs';
 import { resolve, join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { createInterface } from 'readline';
 import { tmpdir } from 'os';
 import yaml from 'js-yaml';
+import { fillVerificationCode } from './lib/email-verifier.mjs';
 
 chromium.use(StealthPlugin());
 
@@ -51,10 +53,13 @@ function loadCandidate() {
     portfolio:  c.portfolio_url,
     github:     c.github,
     location:   'United States',
+    city:       c.city || '',
+    zipCode:    c.zip  || '',
     visaStatus: 'US Citizen',
     authorized: 'Yes',
+    currentCompany: c.current_company || '',
     salary:     profile.compensation?.target_range || '$140,000 - $175,000',
-    salaryText: '$145,000 - $175,000 base. Open to equity and bonus discussion.',
+    salaryText: (profile.compensation?.target_range || '$130K-$180K') + ' base. Open to equity and bonus discussion.',
   };
 }
 
@@ -63,7 +68,7 @@ function findResumePDF(preferCompany = '') {
   if (!existsSync(outputDir)) return null;
   const pdfs = readdirSync(outputDir)
     .filter(f => f.endsWith('.pdf'))
-    .map(f => ({ name: f, path: join(outputDir, f), mtime: readFileSync(join(outputDir, f)).length }))
+    .map(f => ({ name: f, path: join(outputDir, f), mtime: statSync(join(outputDir, f)).mtimeMs }))
     .sort((a, b) => b.mtime - a.mtime);
   if (!pdfs.length) return null;
   // Prefer PDF matching company name
@@ -72,7 +77,33 @@ function findResumePDF(preferCompany = '') {
     const match = pdfs.find(p => p.name.toLowerCase().includes(slug));
     if (match) return match.path;
   }
-  return pdfs[0].path;
+  // Prefer the base CV over any tailored/company-specific PDF
+  return pdfs.find(p => p.name.toLowerCase().includes('base'))?.path ?? pdfs[0].path;
+}
+
+// Loads config/form-answers.yml — the user-maintained Q&A bank.
+// Used as a fallback in all portal handlers when the built-in decide() has no answer.
+function loadFormAnswers() {
+  const path = join(__dirname, 'config/form-answers.yml');
+  if (!existsSync(path)) return [];
+  try {
+    const cfg = yaml.load(readFileSync(path, 'utf-8'));
+    return cfg?.questions || [];
+  } catch { return []; }
+}
+
+// Pattern-match a question string against form-answers.yml entries.
+// Returns { answer, type } or null if no match.
+function lookupFormAnswer(questionText, formAnswers) {
+  if (!questionText || !formAnswers?.length) return null;
+  const q = questionText.toLowerCase();
+  for (const entry of formAnswers) {
+    if (!entry.patterns || entry.answer == null) continue;
+    if (entry.patterns.some(p => q.includes(p.toLowerCase()))) {
+      return { answer: String(entry.answer), type: entry.type || 'text' };
+    }
+  }
+  return null;
 }
 
 // ─── PORTAL DETECTION ────────────────────────────────────────────────────────
@@ -88,7 +119,22 @@ function detectPortal(url) {
   if (url.includes('jobvite.com'))         return 'jobvite';
   if (url.includes('taleo.net'))           return 'taleo';
   if (url.includes('applytojob.com'))      return 'applytojob';
+  // Greenhouse-hosted jobs on company domains (gh_jid or gh_src in query string)
+  if (/[?&]gh_jid=/.test(url) || /[?&]gh_src=/.test(url)) return 'greenhouse';
   return 'generic';
+}
+
+// If the URL is a company JD page (not a direct Greenhouse form), resolve the
+// actual Greenhouse application URL using the gh_jid param.
+// Uses the embed/job_app format which loads the form directly (no Apply button needed,
+// more reliable than the classic board which often redirects back to company sites).
+function resolveGreenhouseUrl(url) {
+  const ghJidMatch = url.match(/[?&]gh_jid=(\d+)/);
+  if (!ghJidMatch) return url; // already a direct greenhouse URL
+  if (url.includes('greenhouse.io')) return url; // already resolved
+  const jobId = ghJidMatch[1];
+  // Use embed form URL — loads the application form directly without JD page redirect
+  return `https://boards.greenhouse.io/embed/job_app?token=${jobId}`;
 }
 
 // ─── HELPERS ─────────────────────────────────────────────────────────────────
@@ -130,11 +176,22 @@ async function safeClick(page, selector, { timeout = 8000, optional = false } = 
 
 async function uploadFile(page, selector, filePath, { timeout = 8000 } = {}) {
   try {
-    await page.waitForSelector(selector, { timeout });
+    // File inputs are often hidden (ATS use styled buttons over them).
+    // Use 'attached' state instead of 'visible' so we can still set files.
+    await page.waitForSelector(selector, { timeout, state: 'attached' });
     await page.setInputFiles(selector, filePath);
     console.log(`  ✅ Resume uploaded: ${filePath}`);
     return true;
   } catch {
+    // Last resort: find any visible file input on the page
+    try {
+      const fileInputs = await page.$$('input[type="file"]');
+      for (const inp of fileInputs) {
+        await inp.setInputFiles(filePath).catch(() => {});
+        console.log(`  ✅ Resume uploaded via fallback input: ${filePath}`);
+        return true;
+      }
+    } catch { /* ignore */ }
     console.log(`  ⚠ File input not found: ${selector}`);
     return false;
   }
@@ -369,19 +426,88 @@ async function solveRecaptchaV2(page) {
   }
 }
 
+// ─── ATS ACCOUNT STORE ───────────────────────────────────────────────────────
+
+const ATS_ACCOUNTS_PATH = join(__dirname, 'config/ats-accounts.yml');
+
+function loadAtsAccounts() {
+  if (!existsSync(ATS_ACCOUNTS_PATH)) return { workday: {} };
+  try {
+    return yaml.load(readFileSync(ATS_ACCOUNTS_PATH, 'utf-8')) || { workday: {} };
+  } catch { return { workday: {} }; }
+}
+
+function saveAtsAccount(platform, tenant, record) {
+  const accounts = loadAtsAccounts();
+  if (!accounts[platform]) accounts[platform] = {};
+  accounts[platform][tenant] = { ...record, updated: new Date().toISOString().slice(0, 10) };
+  writeFileSync(ATS_ACCOUNTS_PATH, yaml.dump(accounts), 'utf-8');
+  console.log(`  💾 Saved ${platform} account for tenant: ${tenant}`);
+}
+
 // ─── PORTAL STRATEGIES ───────────────────────────────────────────────────────
 
 const PORTALS = {
 
   // ── GREENHOUSE ────────────────────────────────────────────────────────────
-  async greenhouse(page, candidate, coverLetter, pdfPath, { securityCode } = {}) {
+  async greenhouse(page, candidate, coverLetter, pdfPath, { securityCode, unanswered } = {}) {
     console.log('\n🌱 Greenhouse detected');
-    await page.waitForLoadState('networkidle');
+    // networkidle can time out on analytics-heavy pages — use load + grace period
+    await page.waitForLoadState('load', { timeout: 20000 }).catch(() => {});
     await page.waitForTimeout(2000);
-    await page.waitForSelector('#first_name, input[name="first_name"]', { timeout: 10000 });
 
     const isNewBoard = page.url().includes('job-boards.greenhouse.io');
     console.log(`  → ${isNewBoard ? 'New Remix board' : 'Classic board'}`);
+
+    // JD page first — scroll to find and click Apply button before looking for form fields
+    const formVisible = await page.$('#first_name, input[name="first_name"]');
+    if (!formVisible) {
+      console.log('  → JD page detected — searching for Apply button (scrolling)...');
+
+      // Scroll through the page to make sure Apply button is rendered
+      await page.evaluate(() => window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' }));
+      await page.waitForTimeout(1500);
+      await page.evaluate(() => window.scrollTo({ top: 0, behavior: 'smooth' }));
+      await page.waitForTimeout(800);
+
+      // Broad Apply button search (text-based + href-based)
+      const applySelectors = [
+        'a[href*="/apply"]',
+        'button:has-text("Apply for this job")',
+        'button:has-text("Apply Now")',
+        'button:has-text("Apply")',
+        'a:has-text("Apply for this job")',
+        'a:has-text("Apply Now")',
+        'a:has-text("Apply")',
+        '[data-qa="btn-apply"]',
+        '[class*="apply" i]',
+      ];
+
+      let applyBtn = null;
+      for (const sel of applySelectors) {
+        applyBtn = await page.$(sel).catch(() => null);
+        if (applyBtn && await applyBtn.isVisible().catch(() => false)) break;
+        applyBtn = null;
+      }
+
+      if (applyBtn) {
+        await applyBtn.scrollIntoViewIfNeeded().catch(() => {});
+        await page.waitForTimeout(500);
+        await applyBtn.click();
+        console.log('  ✅ Clicked Apply button');
+        await page.waitForLoadState('load', { timeout: 20000 }).catch(() => {});
+        await page.waitForTimeout(2000);
+      } else {
+        // Try navigating directly to /apply path (strip query string before appending)
+        const baseUrl = page.url().split('?')[0].replace(/\/$/, '');
+        const applyUrl = `${baseUrl}/apply`;
+        console.log(`  → No Apply button found — navigating to ${applyUrl}`);
+        await page.goto(applyUrl, { waitUntil: 'load', timeout: 20000 }).catch(() => {});
+        await page.waitForTimeout(2000);
+      }
+    }
+
+    await page.waitForSelector('#first_name, input[name="first_name"]', { timeout: 10000 });
 
     // ── Basic text fields — use humanType for reCAPTCHA v3 score boost ──
     // (realistic keystroke events signal human intent to reCAPTCHA)
@@ -422,8 +548,13 @@ const PORTALS = {
     // ── Location (City) — React Select combobox ──
     const locationInput = await page.$('#candidate-location');
     if (locationInput) {
-      await PORTALS._selectComboOption(page, locationInput, 'Los Angeles');
-      console.log('  ✅ Location: Los Angeles, CA');
+      const locationValue = candidate.city || 'Remote';
+      const filled = await PORTALS._selectComboOption(page, locationInput, locationValue);
+      if (!filled && candidate.city) {
+        // Try state-level fallback
+        await PORTALS._selectComboOption(page, locationInput, 'Remote');
+      }
+      console.log(`  ✅ Location: ${locationValue}`);
     }
 
     // ── Resume upload ──
@@ -447,63 +578,86 @@ const PORTALS = {
       }
     }
 
-    // ── Security / verification code (Greenhouse emails this before submission) ──
-    // Greenhouse sometimes sends a one-time code to verify the applicant's email.
-    // Pass it via --code=XXXXXXXX  e.g.  npm run apply <url> --code=Q783GBHb
-    if (securityCode) {
-      const codeSelectors = [
-        '#security_code',
-        'input[id*="security" i]',
-        'input[placeholder*="security code" i]',
-        'input[placeholder*="verification" i]',
-        'input[placeholder*="access code" i]',
-        'input[label*="code" i]',
-      ];
-      let codeFilled = false;
-      for (const sel of codeSelectors) {
-        const el = await page.$(sel);
-        if (el && await el.isVisible()) {
-          await humanType(page, sel, securityCode, { optional: true });
-          console.log(`  ✅ Security code filled: ${securityCode}`);
-          codeFilled = true;
-          break;
-        }
-      }
-      if (!codeFilled) {
-        // Try any short text input near the word "code" in its label
-        const inputs = await page.$$('input[type="text"], input[type="number"]');
-        for (const inp of inputs) {
-          const id = await inp.getAttribute('id') || '';
-          const label = await page.$(`label[for="${id}"]`);
-          const labelText = label ? (await label.innerText()).toLowerCase() : '';
-          if (labelText.includes('code') || labelText.includes('security') || labelText.includes('verify')) {
-            await inp.fill(securityCode);
-            console.log(`  ✅ Security code filled via label match ("${labelText}"): ${securityCode}`);
-            codeFilled = true;
-            break;
-          }
-        }
-      }
-      if (!codeFilled) {
-        console.log(`  ⚠ Security code field not found — if visible in browser, enter manually: ${securityCode}`);
-      }
-    } else {
-      // No code provided — check if field exists and warn
-      const codeField = await page.$('#security_code, input[id*="security" i], input[placeholder*="security code" i]');
-      if (codeField && await codeField.isVisible()) {
-        console.log(`\n  ⚠ Security code field detected! Greenhouse sent a code to ${candidate.email}.`);
-        console.log('  Re-run with: --code=XXXXXXXX  (use the code from your email)');
-      }
-    }
+    // ── Education section (uses dedicated IDs, not question_* pattern) ──
+    await PORTALS._greenhouseEducation(page);
 
     // ── Custom questions (new board: all rendered as text inputs / comboboxes) ──
-    await PORTALS._greenhouseQuestions(page, candidate);
+    const formAnswers = loadFormAnswers();
+    await PORTALS._greenhouseQuestions(page, candidate, { unanswered, formAnswers });
 
     // ── EEOC — decline all (voluntary) ──
     await PORTALS._greenhouseEEOC(page);
   },
 
-  async _greenhouseQuestions(page, candidate) {
+  // ── EDUCATION ─────────────────────────────────────────────────────────────
+  // New Remix board (job-boards.greenhouse.io) uses React Select comboboxes with
+  // IDs: school--0, degree--0, discipline--0  (double dash, NOT underscore)
+  // Classic board (boards.greenhouse.io) uses: school_name_0, degree_0, discipline_0
+  // ALL three fields are React Select — must click + type + pick, NOT el.fill().
+  async _greenhouseEducation(page) {
+    console.log('  📚 Filling education section...');
+
+    const edu = {
+      school: 'Touro College',
+      degree: "Master's",
+      field:  'Information Systems',
+    };
+
+    // Fill a React Select combobox: type prefix to trigger search/filter, pick best match.
+    // Falls back to direct text entry if no options appear (for creatable selects).
+    async function fillEduCombo(newId, classicId, searchTerm, matchTerm) {
+      // Try new board ID (double-dash) first, then classic board ID (underscore)
+      let el = null;
+      for (const sel of [`#${newId}`, `#${classicId}`, `input[id*="${classicId}"]`]) {
+        el = await page.$(sel).catch(() => null);
+        if (el && await el.isVisible().catch(() => false)) break;
+        el = null;
+      }
+      if (!el) {
+        console.log(`  ⚠ [education] field not found: ${newId}`);
+        return false;
+      }
+
+      try {
+        await el.click();
+        await page.waitForTimeout(400);
+        // Type first 6 chars to trigger dropdown/API search
+        await el.type(searchTerm.slice(0, 6), { delay: 60 });
+        await page.waitForTimeout(1500); // wait for API or local filter
+
+        const opts = await page.$$('[role="option"]');
+        for (const opt of opts) {
+          const txt = (await opt.innerText().catch(() => '')).trim();
+          if (txt.toLowerCase().includes(matchTerm.toLowerCase()) ||
+              matchTerm.toLowerCase().includes(txt.toLowerCase())) {
+            await opt.click();
+            console.log(`  ✅ [education] ${newId}: "${txt}"`);
+            await page.waitForTimeout(300);
+            return true;
+          }
+        }
+
+        // No matching option — Escape and try free-text entry (creatable React Select)
+        await page.keyboard.press('Escape');
+        await page.waitForTimeout(200);
+        await el.click();
+        await el.fill(searchTerm);
+        await page.keyboard.press('Enter');
+        await page.waitForTimeout(200);
+        console.log(`  ⚠ [education] ${newId}: no dropdown match — filled as text: "${searchTerm}"`);
+        return true;
+      } catch (err) {
+        console.log(`  ⚠ [education] ${newId} error: ${err.message}`);
+        return false;
+      }
+    }
+
+    await fillEduCombo('school--0',     'school_name_0', edu.school, edu.school);
+    await fillEduCombo('degree--0',     'degree_0',      edu.degree, edu.degree);
+    await fillEduCombo('discipline--0', 'discipline_0',  edu.field,  edu.field);
+  },
+
+  async _greenhouseQuestions(page, candidate, { unanswered, formAnswers = [] } = {}) {
     // ── Helper: get question text for any element ────────────────────────────
     // Greenhouse uses multiple DOM patterns. Try them all.
     async function getQuestionText(el) {
@@ -541,30 +695,89 @@ const PORTALS = {
     // ── Decision engine ──────────────────────────────────────────────────────
     function decide(q) {
       if (!q) return null;
+      // Profile links
       if (q.includes('linkedin') || q.includes('linked in'))         return { type: 'text', value: candidate.linkedin };
-      if (q.includes('portfolio') || q.includes('website'))          return { type: 'text', value: candidate.portfolio };
+      if (q.includes('portfolio') || q.includes('personal website') || q.includes('personal site'))
+                                                                      return { type: 'text', value: candidate.portfolio };
+      if (q.includes('website') && !q.includes('company'))           return { type: 'text', value: candidate.portfolio };
       if (q.includes('github'))                                       return { type: 'text', value: candidate.github || '' };
-      if (q.includes('salary') || q.includes('compensation') || q.includes('target pay') || q.includes('expected pay'))
+      // Salary / comp
+      if (q.includes('salary') || q.includes('compensation') || q.includes('target pay') ||
+          q.includes('expected pay') || q.includes('desired pay') || q.includes('pay expectation'))
                                                                       return { type: 'text', value: candidate.salaryText };
-      // Yes answers
+      // Work authorization — Yes answers
       if (q.includes('authorized to work') || q.includes('eligible to work') || q.includes('legally authorized'))
                                                                       return { type: 'yesno', value: 'Yes' };
       if (q.includes('us citizen') || q.includes('work in the us') || q.includes('work in the united states'))
                                                                       return { type: 'yesno', value: 'Yes' };
+      if (q.includes('currently employed') || q.includes('current employment status'))
+                                                                      return { type: 'yesno', value: 'No' };
       if ((q.includes('cross-functional') || q.includes('cross functional')) ||
           (q.includes('designer') && q.includes('product manager'))) return { type: 'yesno', value: 'Yes' };
-      if (q.includes('remote') && !q.includes('require') && !q.includes('sponsorship'))
+      if (q.includes('remote') && !q.includes('require') && !q.includes('sponsorship') && !q.includes('on-site'))
+                                                                      return { type: 'yesno', value: 'Yes' };
+      if (q.includes('overtime') || q.includes('on call') || q.includes('on-call'))
                                                                       return { type: 'yesno', value: 'Yes' };
       // No answers
-      if (q.includes('sponsorship'))                                  return { type: 'yesno', value: 'No' };
-      if (q.includes('require relocation') || q.includes('willing to relocate'))
+      if (q.includes('sponsorship') || q.includes('require.*visa') || q.includes('visa.*require'))
                                                                       return { type: 'yesno', value: 'No' };
-      // Years experience — open dropdown and pick the range that fits
-      if (q.includes('year') && (q.includes('react') || q.includes('experience') || q.includes('professional')))
+      if (q.includes('require relocation') || q.includes('willing to relocate') || q.includes('open to relocation'))
+                                                                      return { type: 'yesno', value: 'No' };
+      if (q.includes('previously applied') || q.includes('applied before') || q.includes('worked here before') ||
+          q.includes('prior application') || q.includes('previously worked'))
+                                                                      return { type: 'yesno', value: 'No' };
+      if (q.includes('security clearance') || q.includes('clearance required') || q.includes('hold a clearance'))
+                                                                      return { type: 'yesno', value: 'No' };
+      // Start date / notice period
+      if (q.includes('start date') || q.includes('when can you start') || q.includes('earliest start') ||
+          q.includes('notice period') || q.includes('notice required'))
+                                                                      return { type: 'text', value: '2 weeks' };
+      // How did you hear
+      if (q.includes('how did you hear') || q.includes('how did you find') || q.includes('where did you find') ||
+          q.includes('how did you learn') || q.includes('referred by') || q.includes('source'))
+                                                                      return { type: 'text', value: 'LinkedIn' };
+      // Years experience — all tech-stack questions default to 7 years
+      // (covers dropdown ranges AND plain text inputs on new Greenhouse board)
+      if (q.includes('year') && (q.includes('react') || q.includes('typescript') ||
+          q.includes('javascript') || q.includes('js') || q.includes('node') ||
+          q.includes('python') || q.includes('aws') || q.includes('css') ||
+          q.includes('experience') || q.includes('professional') ||
+          q.includes('how many') || q.includes('how long') ||
+          q.includes('writing') || q.includes('working with') || q.includes('using')))
                                                                       return { type: 'years', value: 7 };
-      // State (combobox — type to filter)
-      if (q.includes('which state') || q.includes('state are you') || q.includes('state do you') || q.includes('state you plan'))
+      // City / location text fields
+      if (q === 'city' || (q.includes('city') && q.length < 30 && !q.includes('new york') && !q.includes('which city')))
+                                                                      return { type: 'text', value: candidate.city || '' };
+      // Zip / postal code
+      if (q.includes('zip') || q.includes('postal code'))             return { type: 'text', value: candidate.zipCode || '' };
+      // Country (question field — not the phone widget)
+      if (q.trim() === 'country' || (q.includes('country') && !q.includes('company') && !q.includes('home country') && q.length < 40))
+                                                                      return { type: 'yesno', value: 'United States' };
+      // San Francisco Bay Area residency (Fremont is in the Bay Area ✓)
+      if (q.includes('san francisco bay area') || q.includes('bay area') || (q.includes('reside') && q.includes('san francisco')))
+                                                                      return { type: 'yesno', value: 'Yes' };
+      // Office attendance / in-person work (always Yes per profile preferences)
+      if (q.includes('office') && (q.includes('day') || q.includes('week') || q.includes('willing') || q.includes('work in our') || q.includes('in-person')))
+                                                                      return { type: 'yesno', value: 'Yes' };
+      // Startup / early-stage experience
+      if ((q.includes('start-up') || q.includes('startup') || q.includes('early stage') || q.includes('early-stage')) && (q.includes('experience') || q.includes('worked')))
+                                                                      return { type: 'yesno', value: 'Yes' };
+      // B2B SaaS product experience
+      if (q.includes('b2b') || (q.includes('saas') && q.includes('product')))
+                                                                      return { type: 'yesno', value: 'Yes' };
+      // Level / seniority
+      if ((q.includes('level') && (q.includes('describe') || q.includes('best'))) || q.includes('seniority level'))
+                                                                      return { type: 'yesno', value: 'Senior' };
+      // State (combobox — type to filter) — matches "state/province", "which state", etc.
+      if (q.includes('state/province') || q.includes('which state') || q.includes('state are you') || q.includes('state do you') || q.includes('state you plan'))
                                                                       return { type: 'yesno', value: 'California' };
+      // EEOC / diversity — decline all
+      if (q.includes('gender') || q.includes('pronouns') || q.includes('sex '))
+                                                                      return { type: 'yesno', value: 'Decline to self-identify' };
+      if (q.includes('ethnicity') || q.includes('race ') || q.includes('racial'))
+                                                                      return { type: 'yesno', value: 'Decline to self-identify' };
+      if (q.includes('veteran') || q.includes('military service'))    return { type: 'yesno', value: 'I am not a protected veteran' };
+      if (q.includes('disability') || q.includes('disabled'))         return { type: 'yesno', value: 'No, I do not have a disability' };
       // AI usage / acknowledgment dropdowns (options like "Yes, I acknowledge")
       if (q.includes('acknowledge') || q.includes('ai usage') || q.includes('i agree') ||
           (q.includes('agree') && q.includes('policy')))              return { type: 'yesno', value: 'Yes' };
@@ -578,7 +791,11 @@ const PORTALS = {
       if (!legend) continue;
       const questionText = (await legend.innerText()).toLowerCase().trim();
       const decision = decide(questionText);
-      if (!decision || decision.type !== 'yesno') continue;
+      if (!decision) {
+        if (questionText && unanswered) unanswered.push(questionText);
+        continue;
+      }
+      if (decision.type !== 'yesno') continue;
 
       const radios = await fieldset.$$('input[type="radio"]');
       for (const radio of radios) {
@@ -597,17 +814,33 @@ const PORTALS = {
     const textInputs = await page.$$('input[id^="question_"]:not([type="radio"]):not([type="checkbox"]), textarea[id^="question_"]');
     for (const el of textInputs) {
       const q = await getQuestionText(el);
-      const decision = decide(q);
-      if (!decision) continue;
+      let decision = decide(q);
+
+      // Fallback: check user's form-answers.yml if built-in decide() has no answer
+      if (!decision) {
+        const saved = lookupFormAnswer(q, formAnswers);
+        if (saved) {
+          decision = saved;
+          console.log(`  📖 [form-answers.yml] ${q.slice(0, 60)}: ${saved.answer.slice(0, 60)}`);
+        }
+      }
+
+      if (!decision) {
+        if (q && unanswered) {
+          unanswered.push(q);
+          console.log(`  ⚠ [unanswered — needs manual] ${q.slice(0, 80)}`);
+        }
+        continue;
+      }
 
       if (decision.type === 'years') {
-        await PORTALS._selectYearsOption(page, el, decision.value);
+        await PORTALS._selectYearsOption(page, el, decision.value ?? decision.answer);
       } else if (decision.type === 'text') {
-        await el.fill(decision.value);
-        console.log(`  ✅ [text] ${q.slice(0, 60)}: ${decision.value}`);
-      } else if (decision.type === 'yesno') {
-        await PORTALS._selectComboOption(page, el, decision.value);
-        console.log(`  ✅ [combo] ${q.slice(0, 60)}: ${decision.value}`);
+        await el.fill(decision.value ?? decision.answer);
+        console.log(`  ✅ [text] ${q.slice(0, 60)}: ${(decision.value ?? decision.answer).slice(0, 60)}`);
+      } else if (decision.type === 'yesno' || decision.type === 'select') {
+        await PORTALS._selectComboOption(page, el, decision.value ?? decision.answer);
+        console.log(`  ✅ [combo] ${q.slice(0, 60)}: ${decision.value ?? decision.answer}`);
       }
     }
 
@@ -615,14 +848,32 @@ const PORTALS = {
     const selectEls = await page.$$('select[id^="question_"]');
     for (const sel of selectEls) {
       const q = await getQuestionText(sel);
-      const decision = decide(q);
-      if (!decision) continue;
+      let decision = decide(q);
+
+      // Fallback: check user's form-answers.yml
+      if (!decision) {
+        const saved = lookupFormAnswer(q, formAnswers);
+        if (saved) {
+          decision = saved;
+          console.log(`  📖 [form-answers.yml] ${q.slice(0, 60)}: ${saved.answer.slice(0, 60)}`);
+        }
+      }
+
+      if (!decision) {
+        if (q && unanswered) {
+          unanswered.push(q);
+          console.log(`  ⚠ [unanswered — needs manual] ${q.slice(0, 80)}`);
+        }
+        continue;
+      }
 
       const options = await sel.evaluate(el => [...el.options].map(o => ({ text: o.text.trim(), value: o.value })));
-      const match = options.find(o => o.text.toLowerCase() === decision.value.toLowerCase());
+      const answerVal = decision.value ?? decision.answer;
+      const match = options.find(o => o.text.toLowerCase() === answerVal.toLowerCase())
+        || options.find(o => o.text.toLowerCase().includes(answerVal.toLowerCase()));
       if (match) {
         await sel.selectOption({ value: match.value });
-        console.log(`  ✅ [select] ${q.slice(0, 60)}: ${decision.value}`);
+        console.log(`  ✅ [select] ${q.slice(0, 60)}: ${match.text}`);
       }
     }
 
@@ -648,7 +899,12 @@ const PORTALS = {
       await page.waitForSelector('[role="option"]', { timeout: 3000 }).catch(() => {});
 
       const opts = await page.$$('[role="option"]');
-      if (!opts.length) { await page.keyboard.press('Escape'); return false; }
+      if (!opts.length) {
+        // No dropdown appeared — this is a plain <input type="text">, fill directly
+        await inputEl.fill(String(years));
+        console.log(`  ✅ Years (${years}y) → text fill (no dropdown)`);
+        return true;
+      }
 
       // Parse each option text into a numeric range
       const parsed = [];
@@ -751,7 +1007,6 @@ const PORTALS = {
       if (await pick(opts)) return true;
 
       // If typing filtered too aggressively, clear and show all options then try again
-      await inputEl.selectAll?.().catch(() => {});
       await inputEl.fill('');
       await page.waitForTimeout(400);
       const allOpts = await page.$$('[role="option"]');
@@ -801,21 +1056,21 @@ const PORTALS = {
   // ── LEVER ─────────────────────────────────────────────────────────────────
   async lever(page, candidate, coverLetter, pdfPath) {
     console.log('\n⚙️  Lever detected');
-    await page.waitForLoadState('networkidle');
-    await page.waitForTimeout(1500);
+    await page.waitForLoadState('load', { timeout: 20000 }).catch(() => {});
+    await page.waitForTimeout(2000);
 
     // Check if we need to click Apply button first
     const applyBtn = await page.$('.template-btn-submit, a[href*="/apply"], button:has-text("Apply")');
     if (applyBtn) {
       await applyBtn.click();
-      await page.waitForLoadState('networkidle');
+      await page.waitForLoadState('load', { timeout: 15000 }).catch(() => {});
       await page.waitForTimeout(1500);
     }
 
     await safeFill(page, 'input[name="name"], #name', candidate.fullName);
     await safeFill(page, 'input[name="email"], #email', candidate.email);
     await safeFill(page, 'input[name="phone"], #phone', candidate.phoneFormatted, { optional: true });
-    await safeFill(page, 'input[name="org"], input[name="company"], #org', 'TCS', { optional: true });
+    await safeFill(page, 'input[name="org"], input[name="company"], #org', candidate.currentCompany || 'N/A', { optional: true });
     await safeFill(page, 'input[name="urls[LinkedIn]"], input[placeholder*="LinkedIn"]', candidate.linkedin, { optional: true });
     await safeFill(page, 'input[name="urls[Portfolio]"], input[placeholder*="Portfolio"], input[name="urls[Other]"]', candidate.portfolio, { optional: true });
 
@@ -853,64 +1108,215 @@ const PORTALS = {
   },
 
   // ── WORKDAY ───────────────────────────────────────────────────────────────
-  async workday(page, candidate, coverLetter, pdfPath) {
-    console.log('\n🔷 Workday detected (multi-step — monitoring progress)');
-    await page.waitForLoadState('networkidle');
+  async workday(page, candidate, coverLetter, pdfPath, options = {}) {
+    console.log('\n🔷 Workday detected');
+    await page.waitForLoadState('load', { timeout: 20000 }).catch(() => {});
     await page.waitForTimeout(2000);
 
-    // Click Apply button if on job description page
-    const applyBtn = await page.$('a[href*="apply"], button:has-text("Apply"), a:has-text("Apply Now")');
-    if (applyBtn) {
-      console.log('  → Clicking Apply button');
+    // Extract tenant slug from URL (e.g. alkami.wd12.myworkdayjobs.com → alkami)
+    const tenantMatch = page.url().match(/https?:\/\/([a-z0-9-]+)\.(?:wd\d+\.)?myworkdayjobs\.com/i);
+    const tenant = tenantMatch?.[1]?.toLowerCase() || 'unknown';
+    console.log(`  → Tenant: ${tenant}`);
+
+    // ── Step 1: Click Apply on JD page ──────────────────────────────────────
+    const applyBtn = await page.$('a[data-automation-id*="apply" i], button[data-automation-id*="apply" i], a:has-text("Apply Now"), button:has-text("Apply Now"), a:has-text("Apply"), button:has-text("Apply")').catch(() => null);
+    if (applyBtn && await applyBtn.isVisible().catch(() => false)) {
+      console.log('  → Clicking Apply');
       await applyBtn.click();
-      await page.waitForLoadState('networkidle');
+      await page.waitForLoadState('load', { timeout: 20000 }).catch(() => {});
       await page.waitForTimeout(3000);
     }
 
-    // Workday may ask for login/create account
-    const createAccountBtn = await page.$('a:has-text("Create Account"), button:has-text("Create Account")', ).catch(() => null);
-    if (createAccountBtn) {
-      console.log('  ⚠ Workday requires account creation — taking screenshot for manual completion');
-      return;
-    }
+    // ── Step 2: Authentication (Sign In or Create Account) ───────────────────
+    const accounts = loadAtsAccounts();
+    const savedAccount = accounts.workday?.[tenant];
+    const password = 'Shreya*1';
 
-    // Step 1: Resume upload (Workday usually starts here)
-    if (pdfPath) {
-      const fileInput = await page.$('input[type="file"]');
-      if (fileInput) {
-        await fileInput.setInputFiles(pdfPath);
-        console.log('  ✅ Resume uploaded');
-        await page.waitForTimeout(3000); // Workday parses resume
+    // Detect if we're on a login/signup page
+    const onAuthPage = await page.$('[data-automation-id="signInSection"], [data-automation-id="createAccountLink"], a:has-text("Create Account"), button:has-text("Create Account"), a:has-text("Sign In"), input[data-automation-id*="password" i]').catch(() => null);
+
+    if (onAuthPage) {
+      if (savedAccount) {
+        // ── Sign in with existing account ──
+        console.log(`  → Signing in with existing account for ${tenant}`);
+        await safeClick(page, '[data-automation-id="signInLink"], a:has-text("Sign In"), button:has-text("Sign In")', { optional: true });
+        await page.waitForTimeout(1500);
+        await safeFill(page, '[data-automation-id="email"], input[type="email"]', candidate.email, { optional: true });
+        await safeFill(page, '[data-automation-id="password"], input[type="password"]', savedAccount.password || password, { optional: true });
+        await safeClick(page, '[data-automation-id="signInSubmitButton"], button:has-text("Sign In"), button[type="submit"]', { optional: true });
+        await page.waitForLoadState('load', { timeout: 20000 }).catch(() => {});
+        await page.waitForTimeout(3000);
+
+        // Check for sign-in failure
+        const signInError = await page.$('[data-automation-id="errorMessage"], [class*="error" i]:has-text("invalid"), [class*="error" i]:has-text("incorrect")').catch(() => null);
+        if (signInError) {
+          console.log('  ⚠ Sign-in failed — marking needs-manual');
+          return 'needs-manual';
+        }
+        console.log('  ✅ Signed in successfully');
+      } else {
+        // ── Create new account ──
+        console.log(`  → Creating new account for ${tenant}`);
+        await safeClick(page, '[data-automation-id="createAccountLink"], a:has-text("Create Account"), button:has-text("Create Account")', { optional: true });
+        await page.waitForLoadState('load', { timeout: 15000 }).catch(() => {});
+        await page.waitForTimeout(2000);
+
+        // Check for SMS/phone verification requirement → can't automate, bail
+        const smsField = await page.$('input[type="tel"][data-automation-id*="phone" i], input[placeholder*="mobile" i]').catch(() => null);
+        if (smsField && await smsField.isVisible().catch(() => false)) {
+          console.log('  ⚠ SMS verification required — marking needs-manual');
+          return 'needs-manual';
+        }
+
+        // Fill account creation form
+        await safeFill(page, '[data-automation-id="firstName"], input[aria-label*="First Name" i]', candidate.firstName, { optional: true });
+        await safeFill(page, '[data-automation-id="lastName"], input[aria-label*="Last Name" i]', candidate.lastName, { optional: true });
+        await safeFill(page, '[data-automation-id="email"], input[type="email"]', candidate.email, { optional: true });
+
+        // Password — try longer format if field has min-length > 8
+        const pwField = await page.$('[data-automation-id="password"], input[type="password"]').catch(() => null);
+        if (pwField) {
+          const minLen = await pwField.getAttribute('minlength').catch(() => null);
+          const effectivePassword = (minLen && parseInt(minLen) > 8) ? 'Shreya*123' : password;
+          await pwField.fill(effectivePassword).catch(() => {});
+          // Confirm password field
+          const pwConfirm = await page.$('[data-automation-id="confirmPassword"], input[type="password"]:nth-of-type(2)').catch(() => null);
+          if (pwConfirm) await pwConfirm.fill(effectivePassword).catch(() => {});
+          // Save whatever password was used
+          saveAtsAccount('workday', tenant, { email: candidate.email, password: effectivePassword, created: new Date().toISOString().slice(0, 10) });
+        } else {
+          saveAtsAccount('workday', tenant, { email: candidate.email, password, created: new Date().toISOString().slice(0, 10) });
+        }
+
+        // Submit account creation
+        await safeClick(page, '[data-automation-id="createAccountSubmitButton"], button:has-text("Create Account"), button[type="submit"]', { optional: true });
+        await page.waitForLoadState('load', { timeout: 20000 }).catch(() => {});
+        await page.waitForTimeout(3000);
+
+        // ── Email verification ──
+        const needsEmailVerify = await page.$('input[data-automation-id*="verif" i], input[placeholder*="verif" i], input[autocomplete="one-time-code"]').catch(() => null);
+        if (needsEmailVerify && await needsEmailVerify.isVisible().catch(() => false)) {
+          console.log('  → Email verification required');
+          const filled = await fillVerificationCode(page, {
+            ...(options.gmailTools || {}),
+            company: tenant,
+            timeoutMs: 60000,
+          });
+          if (!filled) {
+            console.log('  ⚠ Email verification timed out — marking needs-manual');
+            return 'needs-manual';
+          }
+          // Submit verification
+          await safeClick(page, 'button:has-text("Verify"), button[type="submit"]', { optional: true });
+          await page.waitForLoadState('load', { timeout: 20000 }).catch(() => {});
+          await page.waitForTimeout(2000);
+        }
+
+        console.log('  ✅ Account created');
       }
     }
 
-    // Fill fields by label text (Workday uses data-automation-id)
-    const fields = [
-      ['[data-automation-id="legalNameSection_firstName"], input[aria-label*="First Name"]',  candidate.firstName],
-      ['[data-automation-id="legalNameSection_lastName"], input[aria-label*="Last Name"]',   candidate.lastName],
-      ['[data-automation-id="email"], input[aria-label*="Email"]',                           candidate.email],
-      ['[data-automation-id="phone-number"], input[aria-label*="Phone"]',                   candidate.phoneFormatted],
-    ];
-    for (const [sel, val] of fields) {
-      await safeFill(page, sel, val, { optional: true, timeout: 3000 });
+    // ── Step 3: Multi-step application wizard ────────────────────────────────
+    console.log('  → Navigating Workday wizard...');
+    let stepCount = 0;
+    const MAX_STEPS = 8;
+
+    while (stepCount < MAX_STEPS) {
+      stepCount++;
+      await page.waitForTimeout(1500);
+
+      // Detect CAPTCHA — bail immediately
+      const captcha = await page.$('iframe[src*="captcha"], iframe[src*="hcaptcha"], iframe[src*="recaptcha"]').catch(() => null);
+      if (captcha) {
+        console.log('  ⚠ CAPTCHA detected — marking needs-manual');
+        return 'needs-manual';
+      }
+
+      // Detect completion (thank you / confirmation page)
+      const bodyText = await page.innerText('body').catch(() => '');
+      if (/thank you|application submitted|successfully submitted|application received/i.test(bodyText)) {
+        console.log('  ✅ Workday application submitted');
+        return 'submitted';
+      }
+
+      // ── Resume upload step ──
+      const fileInput = await page.$('input[type="file"]').catch(() => null);
+      if (fileInput && pdfPath) {
+        console.log('  → Uploading resume');
+        await fileInput.setInputFiles(pdfPath).catch(() => {});
+        await page.waitForTimeout(4000); // Workday parses resume
+      }
+
+      // ── Contact info fields ──
+      const contactFields = [
+        ['[data-automation-id="legalNameSection_firstName"]', candidate.firstName],
+        ['[data-automation-id="legalNameSection_lastName"]',  candidate.lastName],
+        ['[data-automation-id="addressSection_addressLine1"]', ''],   // skip — optional
+        ['[data-automation-id="phone-device-type"]',          ''],   // skip dropdown
+        ['[data-automation-id="phone-number"]',               candidate.phoneFormatted],
+        ['[data-automation-id="email"]',                      candidate.email],
+      ];
+      for (const [sel, val] of contactFields) {
+        if (val) await safeFill(page, sel, val, { optional: true, timeout: 2000 });
+      }
+
+      // ── Cover letter ──
+      if (coverLetter) {
+        await safeFill(page, '[data-automation-id*="coverLetter"] textarea, textarea[aria-label*="cover" i]', coverLetter, { optional: true });
+      }
+
+      // ── Work authorization radio (Yes) ──
+      await safeClick(page, '[data-automation-id*="workAuthorized"] [data-automation-id="true"], [data-automation-id*="authorized"] input[value="1"]', { optional: true });
+
+      // ── Screening questions — yes/no radios ──
+      const radios = await page.$$('input[type="radio"]');
+      for (const radio of radios) {
+        const labelId = await radio.getAttribute('aria-labelledby').catch(() => '');
+        const label = labelId ? await page.$(`[id="${labelId}"]`) : null;
+        const labelText = label ? (await label.innerText().catch(() => '')).toLowerCase() : '';
+        if (!labelText) continue;
+
+        const radioVal = await radio.getAttribute('value') || '';
+        if ((labelText.includes('authorized') || labelText.includes('eligible')) && radioVal === 'true') {
+          await radio.click().catch(() => {});
+        }
+        if (labelText.includes('sponsorship') && radioVal === 'false') {
+          await radio.click().catch(() => {});
+        }
+      }
+
+      // ── LinkedIn URL field ──
+      await safeFill(page, '[data-automation-id="linkedIn"], input[aria-label*="linkedin" i]', candidate.linkedin, { optional: true });
+
+      // ── Try to advance to next step ──
+      const nextBtn = await page.$('[data-automation-id="bottom-navigation-next-btn"], button:has-text("Next"), button[aria-label*="Next"]').catch(() => null);
+      if (nextBtn && await nextBtn.isVisible().catch(() => false)) {
+        console.log(`  → Step ${stepCount}: clicking Next`);
+        await nextBtn.click();
+        await page.waitForLoadState('load', { timeout: 20000 }).catch(() => {});
+        continue;
+      }
+
+      // No next button — check for submit
+      const submitBtn = await page.$('[data-automation-id="bottom-navigation-done-btn"], button:has-text("Submit"), button[aria-label*="Submit"]').catch(() => null);
+      if (submitBtn && await submitBtn.isVisible().catch(() => false)) {
+        console.log('  → Final step — submit button found, stopping here for review');
+        break;
+      }
+
+      // Neither next nor submit — likely on a non-standard step
+      console.log(`  ⚠ Step ${stepCount}: no Next/Submit found — stopping wizard`);
+      break;
     }
 
-    // Cover letter
-    if (coverLetter) {
-      await safeFill(page, 'textarea[aria-label*="Cover"], textarea[aria-label*="cover"], [data-automation-id*="coverLetter"] textarea', coverLetter, { optional: true });
-    }
-
-    // Work authorization
-    await safeClick(page, '[data-automation-id*="authorized"] input[value="1"], input[aria-label*="authorized"][type="radio"]', { optional: true });
-
-    console.log('  ℹ Workday is multi-step. Review each step before proceeding.');
+    console.log(`  ℹ Workday wizard complete (${stepCount} steps). Review screenshot before submitting.`);
   },
 
   // ── ASHBY ─────────────────────────────────────────────────────────────────
   async ashby(page, candidate, coverLetter, pdfPath) {
     console.log('\n🔶 Ashby detected');
-    await page.waitForLoadState('networkidle');
-    await page.waitForTimeout(2000);
+    await page.waitForLoadState('load', { timeout: 20000 }).catch(() => {});
+    await page.waitForTimeout(2500);
 
     // Ashby uses React forms
     await safeFill(page, 'input[name="name"], input[placeholder*="full name" i], input[placeholder*="your name" i]', candidate.fullName, { optional: true });
@@ -928,8 +1334,23 @@ const PORTALS = {
   // ── BAMBOOHR ──────────────────────────────────────────────────────────────
   async bamboohr(page, candidate, coverLetter, pdfPath) {
     console.log('\n🌿 BambooHR detected');
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('load', { timeout: 20000 }).catch(() => {});
     await page.waitForTimeout(2000);
+
+    // BambooHR /careers/ID is a JD page — navigate to the apply form
+    if (page.url().includes('/careers/') && !page.url().includes('/apply')) {
+      const applyBtn = await page.$('a:has-text("Apply"), button:has-text("Apply"), a[href*="apply"]').catch(() => null);
+      if (applyBtn && await applyBtn.isVisible().catch(() => false)) {
+        await applyBtn.click();
+        await page.waitForLoadState('load', { timeout: 15000 }).catch(() => {});
+        await page.waitForTimeout(2000);
+      } else {
+        const applyUrl = page.url().split('?')[0].replace(/\/$/, '') + '/apply';
+        console.log(`  → Navigating to: ${applyUrl}`);
+        await page.goto(applyUrl, { waitUntil: 'load', timeout: 20000 }).catch(() => {});
+        await page.waitForTimeout(2000);
+      }
+    }
 
     await safeFill(page, 'input[name="firstName"], #firstName', candidate.firstName);
     await safeFill(page, 'input[name="lastName"], #lastName', candidate.lastName);
@@ -944,9 +1365,19 @@ const PORTALS = {
   // ── SMARTRECRUITERS ───────────────────────────────────────────────────────
   async smartrecruiters(page, candidate, coverLetter, pdfPath) {
     console.log('\n🔵 SmartRecruiters detected');
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('load', { timeout: 20000 }).catch(() => {});
     await page.waitForTimeout(2000);
 
+    // SmartRecruiters JD pages need "Apply Now" click to reach the form
+    const applyBtn = await page.$('button[data-id="btn-apply"], a[data-id="btn-apply"], button:has-text("Apply Now"), a:has-text("Apply Now"), button:has-text("Apply"), [class*="apply" i]').catch(() => null);
+    if (applyBtn && await applyBtn.isVisible().catch(() => false)) {
+      console.log('  → Clicking Apply button on JD page...');
+      await applyBtn.click();
+      await page.waitForLoadState('load', { timeout: 15000 }).catch(() => {});
+      await page.waitForTimeout(2500);
+    }
+
+    // SmartRecruiters multi-step: resume upload is often the first step
     if (pdfPath) {
       await uploadFile(page, 'input[type="file"]', pdfPath);
       await page.waitForTimeout(3000);
@@ -957,6 +1388,59 @@ const PORTALS = {
     await safeFill(page, 'input[name="email"], input[type="email"]', candidate.email, { optional: true });
     await safeFill(page, 'input[name="phone"]', candidate.phoneFormatted, { optional: true });
     await safeFill(page, 'textarea[name="message"]', coverLetter || '', { optional: true });
+  },
+
+  // ── JOBVITE ───────────────────────────────────────────────────────────────
+  async jobvite(page, candidate, coverLetter, pdfPath) {
+    console.log('\n💼 Jobvite detected');
+    await page.waitForLoadState('load', { timeout: 20000 }).catch(() => {});
+    await page.waitForTimeout(2000);
+
+    // Jobvite JD pages need to navigate to /apply path
+    if (!page.url().includes('/apply')) {
+      const baseUrl = page.url().split('?')[0].replace(/\/$/, '');
+      const applyUrl = `${baseUrl}/apply`;
+      const applyBtn = await page.$('a.jv-button.btn-apply, a[class*="apply" i][href*="apply"], a:has-text("Apply for this Position"), a:has-text("Apply Now")').catch(() => null);
+      if (applyBtn && await applyBtn.isVisible().catch(() => false)) {
+        await applyBtn.click();
+        await page.waitForLoadState('load', { timeout: 15000 }).catch(() => {});
+        await page.waitForTimeout(2000);
+      } else {
+        console.log(`  → Navigating to apply URL: ${applyUrl}`);
+        await page.goto(applyUrl, { waitUntil: 'load', timeout: 20000 }).catch(() => {});
+        await page.waitForTimeout(2000);
+      }
+    }
+
+    // Jobvite application form fields
+    await safeFill(page, '#jv-first-name, input[name="firstName"]', candidate.firstName, { optional: true });
+    await safeFill(page, '#jv-last-name, input[name="lastName"]', candidate.lastName, { optional: true });
+    await safeFill(page, '#jv-email, input[name="email"], input[type="email"]', candidate.email, { optional: true });
+    await safeFill(page, '#jv-phone, input[name="phone"], input[type="tel"]', candidate.phoneFormatted, { optional: true });
+    await safeFill(page, '#jv-linkedin, input[name="LinkedIn"], input[placeholder*="linkedin" i]', candidate.linkedin, { optional: true });
+    await safeFill(page, 'input[placeholder*="website" i], input[placeholder*="portfolio" i]', candidate.portfolio, { optional: true });
+
+    if (pdfPath) {
+      await uploadFile(page, 'input[type="file"]', pdfPath);
+    }
+    if (coverLetter) {
+      await safeFill(page, '#jv-cover-letter, textarea[name="coverLetter"], textarea[placeholder*="cover" i]', coverLetter, { optional: true });
+    }
+
+    // Work authorization dropdowns
+    const selects = await page.$$('select');
+    for (const sel of selects) {
+      const labelText = await sel.evaluate(el => {
+        const label = el.closest('.jv-form-group, div')?.querySelector('label');
+        return label ? label.textContent.toLowerCase() : '';
+      });
+      if (labelText.includes('authorized') || labelText.includes('work in')) {
+        await sel.selectOption({ label: 'Yes' }).catch(() => {});
+      }
+      if (labelText.includes('sponsorship') || labelText.includes('visa')) {
+        await sel.selectOption({ label: 'No' }).catch(() => {});
+      }
+    }
   },
 
   // ── GENERIC FALLBACK ──────────────────────────────────────────────────────
@@ -1031,26 +1515,48 @@ async function run() {
   const url = args.find(a => !a.startsWith('--'));
 
   if (!url) {
-    console.error('Usage: node stealth-apply.mjs <url> [--cover="..."] [--pdf=path] [--headless=false] [--dry-run]');
+    console.error('Usage: node stealth-apply.mjs <url> [--cover="..."] [--no-cover] [--pdf=path] [--headless=false] [--dry-run]');
     process.exit(1);
   }
 
   const headless     = !args.includes('--headless=false');
   const dryRun       = args.includes('--dry-run');
+  const autoYes      = args.includes('--yes');
+  const noCover      = args.includes('--no-cover');   // skip cover letter entirely
   const customCover  = args.find(a => a.startsWith('--cover='))?.slice(8)?.replace(/^["']|["']$/g, '');
   const customPDF    = args.find(a => a.startsWith('--pdf='))?.slice(6);
   const customSalary = args.find(a => a.startsWith('--salary='))?.slice(9)?.replace(/^["']|["']$/g, '');
   const securityCode = args.find(a => a.startsWith('--code='))?.slice(7)?.replace(/^["']|["']$/g, '');
+  const customCompany = args.find(a => a.startsWith('--company='))?.slice(10)?.replace(/^["']|["']$/g, '');
 
   const candidate = loadCandidate();
   if (customSalary) candidate.salaryText = customSalary;
+  const unanswered = [];  // collects skipped questions — written to logs/ after run
 
   const portal = detectPortal(url);
-  const company = url.match(/for=(\w+)|\/([a-z0-9-]+)\/jobs\//i)?.[1] || portal;
+  // For company-hosted Greenhouse links, resolve to the direct form URL
+  const resolvedUrl = portal === 'greenhouse' ? resolveGreenhouseUrl(url) : url;
+  if (resolvedUrl !== url) {
+    console.log(`   → Greenhouse embed detected — resolved to: ${resolvedUrl}`);
+  }
+  // Derive company slug: prefer explicit --company flag, then extract from URL
+  const company = customCompany
+    // BambooHR: company is in subdomain (engenious.bamboohr.com → engenious)
+    || (portal === 'bamboohr' ? resolvedUrl.match(/https?:\/\/([a-z0-9-]+)\.bamboohr\.com/i)?.[1] : null)
+    // Greenhouse board URLs: /COMPANY/jobs/ID
+    || resolvedUrl.match(/greenhouse\.io\/([a-z0-9-]+)\/jobs\//i)?.[1]
+    || resolvedUrl.match(/[?&]for=([^&]+)/i)?.[1]
+    // Greenhouse embed token URLs — try to use original URL's domain (not boards.greenhouse.io)
+    || (portal === 'greenhouse' && !url.includes('greenhouse.io') ? url.match(/https?:\/\/(?:www\.)?([a-z0-9-]+)\./i)?.[1] : null)
+    // For lever.co/COMPANY, ashbyhq.com/COMPANY, jobvite.com/COMPANY, smartrecruiters.com/COMPANY
+    || resolvedUrl.match(/(?:lever\.co|ashbyhq\.com|smartrecruiters\.com|jobvite\.com)\/([a-z0-9-]+)/i)?.[1]
+    // Workday subdomain: COMPANY.myworkdayjobs.com
+    || (portal === 'workday' ? resolvedUrl.match(/https?:\/\/([a-z0-9-]+)\.(?:wd\d+\.)?myworkdayjobs\.com/i)?.[1] : null)
+    || portal;
   const pdfPath = customPDF ? resolve(customPDF) : findResumePDF(company);
 
   console.log('\n🚀 career-ops stealth-apply');
-  console.log(`   URL:     ${url}`);
+  console.log(`   URL:     ${resolvedUrl}`);
   console.log(`   Portal:  ${portal}`);
   console.log(`   Company: ${company}`);
   console.log(`   Resume:  ${pdfPath || '(none found)'}`);
@@ -1058,24 +1564,31 @@ async function run() {
   console.log(`   Browser: ${headless ? 'headless' : 'visible'}`);
 
   // ── Generate cover letter ──
-  let coverLetter = customCover;
-  if (!coverLetter) {
-    // Try to load from latest matching report
-    const reportsDir = join(__dirname, 'reports');
-    if (existsSync(reportsDir)) {
-      const slug = company.toLowerCase().replace(/[^a-z0-9]/g, '');
-      const reports = readdirSync(reportsDir).filter(f =>
-        f.endsWith('.md') && f.toLowerCase().includes(slug)
-      );
-      if (reports.length > 0) {
-        const reportContent = readFileSync(join(reportsDir, reports[0]), 'utf-8');
-        const coverMatch = reportContent.match(/cover letter.*?\n([\s\S]+?)(?=\n##|$)/i);
-        if (coverMatch) coverLetter = coverMatch[1].trim();
+  // Skipped entirely when --no-cover flag is passed (e.g. base CV testing runs).
+  let coverLetter = null;
+  if (!noCover) {
+    coverLetter = customCover || null;
+    if (!coverLetter) {
+      // Try to load from latest matching report
+      const reportsDir = join(__dirname, 'reports');
+      if (existsSync(reportsDir)) {
+        const slug = company.toLowerCase().replace(/[^a-z0-9]/g, '');
+        const reports = readdirSync(reportsDir).filter(f =>
+          f.endsWith('.md') && f.toLowerCase().includes(slug)
+        );
+        if (reports.length > 0) {
+          const reportContent = readFileSync(join(reportsDir, reports[0]), 'utf-8');
+          const coverMatch = reportContent.match(/^#+\s*cover letter[^\n]*\n+([\s\S]+?)(?=\n#+\s|\n\*\*[A-Z]|$)/im)
+            || reportContent.match(/\*\*cover letter\*\*[^\n]*\n+([\s\S]+?)(?=\n\*\*[A-Z]|\n##|$)/im);
+          if (coverMatch) coverLetter = coverMatch[1].trim();
+        }
       }
     }
-  }
-  if (!coverLetter) {
-    coverLetter = `Senior Frontend Engineer with 7+ years building React 18 and TypeScript applications at scale -- serving 20M+ users at Citi and leading a React 18 team at J&J (10K+ daily users). Expert in component architecture, performance optimization, REST/GraphQL API integration, and CI/CD. US Citizen, no sponsorship needed. Targeting ${candidate.salaryText}.`;
+    // Only generate a generic fallback when there IS a matching report but no explicit cover section.
+    // Do NOT auto-generate for completely unknown companies — attach nothing instead.
+    if (!coverLetter && company !== portal) {
+      console.log('  ℹ No cover letter found for this company — skipping (pass --cover="..." to add one)');
+    }
   }
 
   // ── Launch browser ──
@@ -1109,13 +1622,13 @@ async function run() {
 
   try {
     console.log('\n⏳ Navigating to job page...');
-    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    await page.goto(resolvedUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
     await page.waitForTimeout(2000);
 
     // ── Fill form ──
     console.log('\n📝 Filling form...');
     const fillFn = PORTALS[portal] || PORTALS.generic;
-    await fillFn(page, candidate, coverLetter, pdfPath, { securityCode });
+    await fillFn(page, candidate, coverLetter, pdfPath, { securityCode, unanswered });
 
     await page.waitForTimeout(1000);
 
@@ -1128,6 +1641,35 @@ async function run() {
     const screenshotPath = await screenshot(page, company);
     console.log(`\n✅ Form filled. Review the screenshot before submitting.`);
     console.log(`   Open: ${screenshotPath}`);
+
+    // ── Unanswered questions log ──
+    if (unanswered.length) {
+      const logsDir = join(__dirname, 'logs');
+      mkdirSync(logsDir, { recursive: true });
+      const date = new Date().toISOString().slice(0, 10);
+      const logPath = join(logsDir, `unanswered-questions-${date}.md`);
+      const content = [
+        `# Unanswered Questions — ${company} — ${date}`,
+        '',
+        `URL: ${resolvedUrl}`,
+        '',
+        '## Questions that need answers',
+        ...unanswered.map(q => `- [ ] ${q}`),
+        '',
+        '## How to fix',
+        'Add an entry to `config/form-answers.yml` for each question above:',
+        '',
+        '```yaml',
+        '  - patterns: ["keyword from question"]',
+        '    answer: "your answer"',
+        '    type: text   # or: select',
+        '```',
+      ].join('\n');
+      writeFileSync(logPath, content, 'utf-8');
+      console.log(`\n📋 ${unanswered.length} unanswered question(s) logged → ${logPath}`);
+    } else {
+      console.log('\n✅ All questions answered!');
+    }
 
     if (dryRun) {
       console.log('\n🏁 Dry run complete — no submission made.');
@@ -1149,7 +1691,7 @@ async function run() {
 
     // ── Confirm ──
     console.log('\n─────────────────────────────────────────');
-    const answer = await confirm('Review the screenshot above. Submit application? (yes / no / open): ');
+    const answer = autoYes ? 'yes' : await confirm('Review the screenshot above. Submit application? (yes / no / open): ');
 
     if (answer === 'open') {
       // Open screenshot in default viewer
@@ -1200,7 +1742,29 @@ async function run() {
   }
 }
 
-run().catch(err => {
-  console.error('Fatal:', err.message);
-  process.exit(1);
-});
+// ─── EXPORTS (for auto-apply.mjs orchestrator) ───────────────────────────────
+export {
+  PORTALS,
+  loadCandidate,
+  detectPortal,
+  resolveGreenhouseUrl,
+  findResumePDF,
+  humanBehavior,
+  solveRecaptchaV2,
+  findSubmitButton,
+  screenshot,
+  humanType,
+  safeFill,
+  safeClick,
+  uploadFile,
+  randomBetween,
+};
+
+// ─── CLI ENTRY POINT ─────────────────────────────────────────────────────────
+// Only run when invoked directly (not when imported as a module)
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  run().catch(err => {
+    console.error('Fatal:', err.message);
+    process.exit(1);
+  });
+}

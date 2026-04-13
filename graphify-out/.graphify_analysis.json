@@ -1,0 +1,191 @@
+{
+  "communities": {
+    "0": [
+      "career_cleantablecell",
+      "career_computemetrics",
+      "career_enrichappurlsbycompany",
+      "career_enrichfromscanhistory",
+      "career_loadbatchinputurls",
+      "career_loadjoburls",
+      "career_loadreportsummary",
+      "career_normalizecompany",
+      "career_normalizestatus",
+      "career_parseapplications",
+      "career_replacestatusinline",
+      "career_statuspriority",
+      "career_updateapplicationstatus",
+      "dashboard_internal_data_career_go",
+      "data_batchentry"
+    ],
+    "1": [
+      "dashboard_internal_ui_screens_viewer_go",
+      "screens_viewerclosedmsg",
+      "screens_viewermodel",
+      "screens_viewermodel_bodyheight",
+      "screens_viewermodel_init",
+      "screens_viewermodel_renderbody",
+      "screens_viewermodel_renderfooter",
+      "screens_viewermodel_renderheader",
+      "screens_viewermodel_resize",
+      "screens_viewermodel_styleline",
+      "screens_viewermodel_update",
+      "screens_viewermodel_view",
+      "viewer_newviewermodel"
+    ],
+    "2": [
+      "dashboard_internal_ui_screens_pipeline_go",
+      "pipeline_newpipelinemodel",
+      "screens_pipelineclosedmsg",
+      "screens_pipelineloadreportmsg",
+      "screens_pipelinemodel_applyfilterandsort",
+      "screens_pipelineopenreportmsg",
+      "screens_pipelineopenurlmsg",
+      "screens_pipelinetab",
+      "screens_pipelineupdatestatusmsg",
+      "screens_reportsummary"
+    ],
+    "3": [
+      "screens_pipelinemodel",
+      "screens_pipelinemodel_copyreportcache",
+      "screens_pipelinemodel_countforfilter",
+      "screens_pipelinemodel_enrichreport",
+      "screens_pipelinemodel_height",
+      "screens_pipelinemodel_init",
+      "screens_pipelinemodel_rendertabs",
+      "screens_pipelinemodel_resize"
+    ],
+    "4": [
+      "dashboard_appmodel",
+      "dashboard_appmodel_init",
+      "dashboard_appmodel_update",
+      "dashboard_appmodel_view",
+      "dashboard_main_go",
+      "dashboard_viewstate",
+      "main_main"
+    ],
+    "5": [
+      "screens_pipelinemodel_overlaystatuspicker",
+      "screens_pipelinemodel_renderheader",
+      "screens_pipelinemodel_renderhelp",
+      "screens_pipelinemodel_renderpreview",
+      "screens_pipelinemodel_rendersortbar",
+      "screens_pipelinemodel_view",
+      "screens_pipelinemodel_width"
+    ],
+    "6": [
+      "pipeline_statuslabel",
+      "screens_pipelinemodel_countbynormstatus",
+      "screens_pipelinemodel_renderappline",
+      "screens_pipelinemodel_renderbody",
+      "screens_pipelinemodel_rendermetrics",
+      "screens_pipelinemodel_scorestyle",
+      "screens_pipelinemodel_statuscolormap"
+    ],
+    "7": [
+      "screens_pipelinemodel_adjustscroll",
+      "screens_pipelinemodel_currentapp",
+      "screens_pipelinemodel_cursorlineestimate",
+      "screens_pipelinemodel_handlekey",
+      "screens_pipelinemodel_handlestatuspicker",
+      "screens_pipelinemodel_loadcurrentreport",
+      "screens_pipelinemodel_update"
+    ],
+    "8": [
+      "dashboard_internal_theme_theme_go",
+      "theme_newtheme",
+      "theme_theme"
+    ],
+    "9": [
+      "dashboard_internal_model_career_go",
+      "model_careerapplication",
+      "model_pipelinemetrics"
+    ],
+    "10": [
+      "catppuccin_newcatppuccinmocha",
+      "dashboard_internal_theme_catppuccin_go"
+    ]
+  },
+  "cohesion": {
+    "0": 0.23,
+    "1": 0.24,
+    "2": 0.2,
+    "3": 0.29,
+    "4": 0.29,
+    "5": 0.43,
+    "6": 0.38,
+    "7": 0.38,
+    "8": 0.67,
+    "9": 0.67,
+    "10": 1.0
+  },
+  "gods": [
+    {
+      "id": "screens_pipelinemodel",
+      "label": "PipelineModel",
+      "edges": 29
+    },
+    {
+      "id": "screens_viewermodel",
+      "label": "ViewerModel",
+      "edges": 10
+    },
+    {
+      "id": "career_parseapplications",
+      "label": "ParseApplications()",
+      "edges": 5
+    },
+    {
+      "id": "dashboard_appmodel",
+      "label": "appModel",
+      "edges": 4
+    },
+    {
+      "id": "pipeline_statuslabel",
+      "label": "statusLabel()",
+      "edges": 4
+    },
+    {
+      "id": "career_enrichfromscanhistory",
+      "label": "enrichFromScanHistory()",
+      "edges": 3
+    },
+    {
+      "id": "career_normalizecompany",
+      "label": "normalizeCompany()",
+      "edges": 3
+    },
+    {
+      "id": "career_enrichappurlsbycompany",
+      "label": "enrichAppURLsByCompany()",
+      "edges": 3
+    },
+    {
+      "id": "career_normalizestatus",
+      "label": "NormalizeStatus()",
+      "edges": 3
+    },
+    {
+      "id": "pipeline_newpipelinemodel",
+      "label": "NewPipelineModel()",
+      "edges": 2
+    }
+  ],
+  "surprises": [],
+  "questions": [
+    {
+      "type": "bridge_node",
+      "question": "Why does `PipelineModel` connect `Community 3` to `Community 2`, `Community 5`, `Community 6`, `Community 7`?",
+      "why": "High betweenness centrality (0.173) - this node is a cross-community bridge."
+    },
+    {
+      "type": "bridge_node",
+      "question": "Why does `statusLabel()` connect `Community 6` to `Community 2`?",
+      "why": "High betweenness centrality (0.004) - this node is a cross-community bridge."
+    },
+    {
+      "type": "isolated_nodes",
+      "question": "What connects `viewState`, `ViewerClosedMsg`, `PipelineClosedMsg` to the rest of the system?",
+      "why": "13 weakly-connected nodes found - possible documentation gaps or missing edges."
+    }
+  ]
+}

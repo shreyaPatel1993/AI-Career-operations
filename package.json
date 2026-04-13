@@ -19,7 +19,10 @@
     "jobright:json": "node jobright-fetch.mjs --json",
     "apply": "node stealth-apply.mjs",
     "apply:visible": "node stealth-apply.mjs --headless=false",
-    "apply:dry": "node stealth-apply.mjs --dry-run"
+    "apply:dry": "node stealth-apply.mjs --dry-run",
+    "auto-apply": "node auto-apply.mjs",
+    "auto-apply:live": "node auto-apply.mjs --live --limit=10",
+    "auto-apply:visible": "node auto-apply.mjs --headless=false --live --limit=10"
   },
   "keywords": [
     "ai",

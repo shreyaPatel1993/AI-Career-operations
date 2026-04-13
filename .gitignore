@@ -10,6 +10,7 @@ batch/tracker-additions/
 .env
 .env.local
 .env.*.local
+config/ats-accounts.yml
 
 # IDE
 .vscode/
@@ -30,3 +31,13 @@ npm-debug.log*
 *.pdf
 dist/
 build/
+
+# Personal Data, Tracking & Credentials
+cv.md
+config/profile.yml
+config/form-answers.yml
+data/*.md
+data/*.tsv
+reports/*.md
+logs/
+.claude/settings.local.json
